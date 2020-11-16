@@ -8,8 +8,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
-	client "github.com/nm-morais/demmon-client/pkg"
 	demmon_client "github.com/nm-morais/demmon-client/pkg"
 	"github.com/nm-morais/demmon-common/body_types"
 )
@@ -18,14 +18,12 @@ type Operation int
 
 const (
 	nodeUpdatesOp Operation = iota
-	addPlugin
 	metricsOp
 	inViewOp
 )
 
 var operations = []string{
 	"Node Updates",
-	"Add Plugin",
 	"get Registered Metrics",
 	"Get InView",
 }
@@ -41,7 +39,7 @@ func readOp(reader *bufio.Reader) (*Operation, []string, error) {
 	text = strings.Replace(text, "\n", "", -1)
 	split := strings.Split(text, " ")
 	if len(split) == 0 {
-		return nil, nil, errors.New("Invalid operation")
+		return nil, nil, errors.New("invalid operation")
 	}
 	op, err := strconv.ParseInt(split[0], 10, 32)
 	if err != nil {
@@ -79,7 +77,7 @@ func errFunc(err error) {
 	panic(err)
 }
 
-func Repl(clientConf client.DemmonClientConf) {
+func Repl(clientConf demmon_client.DemmonClientConf) {
 	f := bufio.NewWriter(os.Stdout)
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Println("Demmon Shell")
@@ -89,11 +87,14 @@ func Repl(clientConf client.DemmonClientConf) {
 	if err != nil {
 		panic(err)
 	}
-
+	err = c.ConnectTimeout(1 * time.Second)
+	if err != nil {
+		panic(err)
+	}
 	for {
 		printOps(f)
 		f.Flush()
-		op, args, err := readOp(reader)
+		op, _, err := readOp(reader)
 		if err != nil {
 			fmt.Fprintf(f, "got err: %+s\n", err)
 		}
@@ -103,18 +104,11 @@ func Repl(clientConf client.DemmonClientConf) {
 			if err != nil {
 				fmt.Fprintf(f, "got err: %+s\n", err)
 			}
+			fmt.Fprintf(f, "\n")
 			for i, m := range res {
-				fmt.Fprintf(f, "metric %d:%s\n", i, m)
+				fmt.Fprintf(f, "metric %d: %s\n", i, m)
 			}
-		case addPlugin:
-			if len(args) != 2 {
-				fmt.Fprintf(f, "Not enough args <plugin_path> <plugin_name>\n")
-				continue
-			}
-			err := c.AddPlugin(args[1], args[2])
-			if err != nil {
-				fmt.Fprintf(f, "got err: %+s\n", err)
-			}
+			fmt.Fprintf(f, "\n")
 		case inViewOp:
 			fmt.Fprintf(f, "%+v\n", c.GetInView())
 		default:

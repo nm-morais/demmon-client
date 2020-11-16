@@ -1,26 +1,24 @@
 package client
 
 import (
-	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/mitchellh/mapstructure"
 	"github.com/nm-morais/demmon-common/body_types"
 	"github.com/nm-morais/demmon-common/routes"
 	"github.com/nm-morais/go-babel/pkg/message"
 	"github.com/nm-morais/go-babel/pkg/peer"
+	"golang.org/x/net/context"
 )
 
 var (
-	NotConnectedErr = errors.New("not connected")
+	ErrNotConnected = errors.New("not connected")
 )
 
 // Call represents an active request
@@ -33,9 +31,9 @@ type Call struct {
 
 // Call represents an active request
 type Subscription struct {
-	Res   chan body_types.Response
-	Done  chan bool
-	Error error
+	Done        chan interface{}
+	ContentChan chan interface{}
+	Id          uint64
 }
 
 func newCall(req body_types.Request) *Call {
@@ -45,10 +43,11 @@ func newCall(req body_types.Request) *Call {
 	}
 }
 
-func newSub() *Subscription {
+func newSub(id uint64) *Subscription {
 	return &Subscription{
-		Res:  make(chan body_types.Response),
-		Done: make(chan bool),
+		Id:          id,
+		Done:        make(chan interface{}),
+		ContentChan: make(chan interface{}),
 	}
 }
 
@@ -90,29 +89,23 @@ func (cl *DemmonClient) GetInView() []peer.Peer {
 }
 
 func (cl *DemmonClient) GetRegisteredMetrics() ([]string, error) {
-	resp, err := cl.request(routes.GetRegisteredMetrics, nil)
+	resp, err := cl.request(routes.GetRegisteredMetricBuckets, nil)
 	if err != nil {
 		return nil, err
 	}
 	if resp.Error {
 		return nil, resp.GetMsgAsErr()
 	}
-	res := resp.Message.([]string)
-	return res, nil
-}
 
-func (cl *DemmonClient) RegisterMetrics(metrics []body_types.MetricMetadata) error {
-	resp, err := cl.request(routes.RegisterMetrics, metrics)
-	if err != nil {
-		return err
-	}
+	respDecoded := []string{}
+	err = mapstructure.Decode(resp.Message, &respDecoded)
 	if resp.Error {
-		return resp.GetMsgAsErr()
+		return nil, err
 	}
-	return nil
+	return respDecoded, nil
 }
 
-func (cl *DemmonClient) PushMetricBlob(service, origin string, values []string) error {
+func (cl *DemmonClient) PushMetricBlob(values body_types.PointCollection) error {
 	resp, err := cl.request(routes.PushMetricBlob, values)
 	if err != nil {
 		return err
@@ -123,60 +116,6 @@ func (cl *DemmonClient) PushMetricBlob(service, origin string, values []string) 
 	return err
 }
 
-func (cl *DemmonClient) AddPlugin(pluginPath, pluginName string) error {
-	file, err := os.Open(pluginPath) // For read access.
-	if err != nil {
-		return err
-	}
-	i := 0
-	for {
-		chunk := make([]byte, cl.conf.ChunkSize)
-		n, err := file.Read(chunk)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
-		}
-		contentb64 := base64.StdEncoding.EncodeToString(chunk[:n])
-		toSend := body_types.PluginFileBlock{
-			Name:       pluginName,
-			FirstBlock: i == 0,
-			FinalBlock: false,
-			Content:    contentb64,
-		}
-		_, err = cl.request(routes.AddPlugin, toSend)
-		if err != nil {
-			return err
-		}
-		i++
-	}
-	toSend := body_types.PluginFileBlock{
-		Name:       pluginName,
-		FinalBlock: true,
-		Content:    "",
-	}
-	_, err = cl.request(routes.AddPlugin, toSend)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (cl *DemmonClient) GetRegisteredPlugins() ([]string, error) {
-	resp, err := cl.request(routes.GetRegisteredPlugins, nil)
-	if err != nil {
-		return nil, err
-	}
-	if err != nil {
-		return nil, err
-	}
-	if resp.Error {
-		return nil, resp.GetMsgAsErr()
-	}
-	return resp.Message.([]string), nil
-}
-
 func (cl *DemmonClient) BroadcastMessage(msg message.Message, nrHops int) {
 
 }
@@ -185,16 +124,12 @@ func (cl *DemmonClient) RegisterBroadcastMessageHandler(msgId message.ID, handle
 
 }
 
-func (cl *DemmonClient) QueryMetric(serviceName, metricName, origin, expression string) float64 {
+func (cl *DemmonClient) MakeQuery(serviceName, metricName, origin, expression string) float64 {
 	return 0
 }
 
-func (cl *DemmonClient) InstallTreeAggregationFunction(nrHops int, sourceMetricName, resultingMetricName, timeFrame, expression string) { // TODO queries
-
-}
-
-func (cl *DemmonClient) InstallLocalAggregationFunction(sourceMetricName, resultingMetricName, timeFrame, expression string) { // TODO queries
-
+func (cl *DemmonClient) SubscribeQueryPeriodic() error {
+	return nil
 }
 
 func (c *DemmonClient) ConnectTimeout(timeout time.Duration) error {
@@ -207,12 +142,13 @@ func (c *DemmonClient) ConnectTimeout(timeout time.Duration) error {
 	}
 	c.conn = conn
 	go c.read()
-	return nil
+	return err
+
 }
 
-func (c *DemmonClient) request(reqType int, payload interface{}) (*body_types.Response, error) {
+func (c *DemmonClient) request(reqType routes.RequestType, payload interface{}) (*body_types.Response, error) {
 	if c.conn == nil {
-		return nil, NotConnectedErr
+		return nil, ErrNotConnected
 	}
 	c.mutex.Lock()
 	id := c.counter
@@ -222,7 +158,6 @@ func (c *DemmonClient) request(reqType int, payload interface{}) (*body_types.Re
 	c.pending[id] = call
 	err := c.conn.WriteJSON(&req)
 	if err != nil {
-		delete(c.subs, id)
 		delete(c.pending, id)
 		c.mutex.Unlock()
 		return nil, err
@@ -240,9 +175,9 @@ func (c *DemmonClient) request(reqType int, payload interface{}) (*body_types.Re
 	return &call.Res, nil
 }
 
-func (c *DemmonClient) subscribe(reqType int, payload interface{}) (*body_types.Response, *Subscription, error) {
+func (c *DemmonClient) subscribe(reqType routes.RequestType, payload interface{}) (*body_types.Response, *Subscription, error) {
 	if c.conn == nil {
-		return nil, nil, NotConnectedErr
+		return nil, nil, ErrNotConnected
 	}
 	c.mutex.Lock()
 	id := c.counter
@@ -250,10 +185,12 @@ func (c *DemmonClient) subscribe(reqType int, payload interface{}) (*body_types.
 	req := body_types.Request{ID: id, Type: reqType, Message: payload}
 	call := newCall(req)
 	c.pending[id] = call
-	newSub := newSub()
+	newSub := newSub(id)
 	c.subs[id] = newSub
 	err := c.conn.WriteJSON(&req)
 	if err != nil {
+		close(newSub.Done)
+		close(newSub.ContentChan)
 		delete(c.subs, id)
 		delete(c.pending, id)
 		c.mutex.Unlock()
@@ -263,12 +200,22 @@ func (c *DemmonClient) subscribe(reqType int, payload interface{}) (*body_types.
 	select {
 	case <-call.Done:
 	case <-time.After(2 * time.Second):
+		c.mutex.Lock()
+		delete(c.subs, id)
+		c.mutex.Unlock()
 		call.Error = errors.New("request timeout")
-	}
-	if call.Error != nil {
 		return nil, nil, call.Error
 	}
 	return &call.Res, newSub, nil
+}
+
+func (c *DemmonClient) clearSub(sub *Subscription) {
+	fmt.Println("Clearing subscription...")
+	c.mutex.Lock()
+	delete(c.subs, sub.Id)
+	c.mutex.Unlock()
+	close(sub.Done)
+	close(sub.ContentChan)
 }
 
 func (c *DemmonClient) read() {
@@ -281,21 +228,24 @@ func (c *DemmonClient) read() {
 			continue
 		}
 		if res.Push {
+			fmt.Printf("Got push: %+v\n", res)
 			c.mutex.Lock()
 			sub := c.subs[res.ID]
 			c.mutex.Unlock()
 			if sub == nil {
-				err = errors.New("no subscription found")
+				fmt.Println(errors.New("no subscription found"))
 				continue
 			}
 			select {
-			case sub.Res <- res:
-			default:
-				err = errors.New("could not deliver subscription result")
-				continue
+			case <-sub.Done:
+				fmt.Println(errors.New("could not deliver subscription result because it finished already"))
+			case sub.ContentChan <- res.Message:
+				fmt.Println("Delivered content to sub")
+			case <-time.After(1 * time.Second):
+				err = errors.New("could not deliver subscription result because there was no listener")
 			}
+			continue
 		}
-		// fmt.Printf("received message: %+v\n", res)
 		call := c.pending[res.ID]
 		c.mutex.Lock()
 		delete(c.pending, res.ID)
@@ -314,6 +264,7 @@ func (c *DemmonClient) read() {
 		}
 
 	}
+	fmt.Println("Read routine exiting due to err: ", err)
 	c.mutex.Lock()
 	for _, call := range c.pending {
 		call.Error = err
@@ -321,3 +272,14 @@ func (c *DemmonClient) read() {
 	}
 	c.mutex.Unlock()
 }
+
+// func (cl *DemmonClient) RegisterMetrics(metrics []body_types.MetricMetadata) error {
+// 	resp, err := cl.request(routes.RegisterMetrics, metrics)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	if resp.Error {
+// 		return resp.GetMsgAsErr()
+// 	}
+// 	return nil
+// }
