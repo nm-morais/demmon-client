@@ -155,7 +155,7 @@ func Repl(clientConf demmon_client.DemmonClientConf) {
 			}
 
 			queryStr := strings.Join(argsSplit[4:], " ")
-			res, err := c.InstallContinuousQuery(queryStr, "", uint(queryFrequencySeconds), time.Duration(queryTimeout)*time.Second, outputMetricName, int(outputMetricCount), 3)
+			res, err := c.InstallContinuousQuery(queryStr, "", time.Duration(queryFrequencySeconds), time.Duration(queryTimeout)*time.Second, outputMetricName, int(outputMetricCount), 3)
 			if err != nil {
 				fmt.Fprintf(f, "Got err: %s\n", err.Error())
 				continue

@@ -132,8 +132,10 @@ func (cl *DemmonClient) RegisterBroadcastMessageHandler(msgId message.ID, handle
 
 func (cl *DemmonClient) SubscribeQuery(expression string, timeout, repeatTime time.Duration) QuerySubscription {
 	reqBody := body_types.QueryRequest{
-		Query:   expression,
-		Timeout: timeout,
+		Query: body_types.RunnableExpression{
+			Timeout:    timeout,
+			Expression: expression,
+		},
 	}
 	querySub := QuerySubscription{
 		ResChan: make(chan *[]body_types.Timeseries),
@@ -163,8 +165,10 @@ func (cl *DemmonClient) SubscribeQuery(expression string, timeout, repeatTime ti
 
 func (cl *DemmonClient) Query(expression string, timeout time.Duration) ([]body_types.Timeseries, error) {
 	reqBody := body_types.QueryRequest{
-		Query:   expression,
-		Timeout: timeout,
+		Query: body_types.RunnableExpression{
+			Expression: expression,
+			Timeout:    timeout,
+		},
 	}
 	resp, err := cl.request(routes.Query, reqBody)
 	if err != nil {
@@ -184,21 +188,24 @@ func (cl *DemmonClient) Query(expression string, timeout time.Duration) ([]body_
 func (cl *DemmonClient) InstallContinuousQuery(
 	expression string,
 	description string,
-	queryRepetitionSeconds uint,
 	expressionTimeout time.Duration,
+	outputMetricFrequency time.Duration,
 	outputMetricName string,
 	outputMetricCount int,
 	nrRetries int,
 ) (uint64, error) {
-
 	reqBody := body_types.InstallContinuousQueryRequest{
 		Expression:        expression,
 		Description:       description,
 		ExpressionTimeout: expressionTimeout,
-		FrequencySeconds:  queryRepetitionSeconds,
-		OutputMetricCount: outputMetricCount,
-		OutputMetricName:  outputMetricName,
 		NrRetries:         nrRetries,
+		OutputBucketOpts: body_types.BucketOptions{
+			Name: outputMetricName,
+			Granularity: body_types.Granularity{
+				Granularity: outputMetricFrequency,
+				Count:       outputMetricCount,
+			},
+		},
 	}
 
 	resp, err := cl.request(routes.InstallContinuousQuery, reqBody)
@@ -240,12 +247,14 @@ func (cl *DemmonClient) GetContinuousQueries() (*body_types.GetContinuousQueries
 	return respDecoded, nil
 }
 
-func (cl *DemmonClient) InstallCustomInterestSet(query, outputMetricName string, hosts []string, outputMetricGranularity body_types.Granularity) (uint64, error) {
+func (cl *DemmonClient) InstallCustomInterestSet(expression string, expressionTimeout time.Duration, outputMetricName string, hosts []*body_types.Peer, outputMetricGranularity body_types.Granularity) (uint64, error) {
 	set := body_types.CustomInterestSet{
-		Query:                   query,
-		Hosts:                   hosts,
-		OutputMetricName:        outputMetricName,
-		OutputMetricGranularity: outputMetricGranularity,
+		Query: body_types.RunnableExpression{Timeout: expressionTimeout, Expression: expression},
+		Hosts: hosts,
+		OutputBucketOpts: body_types.BucketOptions{
+			Name:        outputMetricName,
+			Granularity: outputMetricGranularity,
+		},
 	}
 	resp, err := cl.request(routes.InstallCustomInterestSet, set)
 	if err != nil {
@@ -260,6 +269,34 @@ func (cl *DemmonClient) InstallCustomInterestSet(query, outputMetricName string,
 		return math.MaxUint64, err
 	}
 
+	return respDecoded.SetId, nil
+}
+
+func (cl *DemmonClient) InstallNeighborhoodInterestSet(expression string, expressionTimeout time.Duration, ttl int, outputMetricName string, runFrequency time.Duration, outputMetricStorageCount, maxQueryRetries int) (uint64, error) {
+	set := body_types.NeighborhoodInterestSet{
+		MaxRetries: maxQueryRetries,
+		Query:      body_types.RunnableExpression{Timeout: expressionTimeout, Expression: expression},
+		TTL:        ttl,
+		OutputBucketOpts: body_types.BucketOptions{
+			Name: outputMetricName,
+			Granularity: body_types.Granularity{
+				Granularity: runFrequency,
+				Count:       outputMetricStorageCount,
+			},
+		},
+	}
+	resp, err := cl.request(routes.InstallNeighborhoodInterestSet, set)
+	if err != nil {
+		return math.MaxUint64, err
+	}
+	if resp.Error {
+		return math.MaxUint64, resp.GetMsgAsErr()
+	}
+	respDecoded := body_types.InstallInterestSetReply{}
+	err = decode(resp.Message, &respDecoded)
+	if resp.Error {
+		return math.MaxUint64, err
+	}
 	return respDecoded.SetId, nil
 }
 
