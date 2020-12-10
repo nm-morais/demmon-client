@@ -227,6 +227,21 @@ func (cl *DemmonClient) InstallContinuousQuery(
 	return respDecoded.TaskId, nil
 }
 
+func (cl *DemmonClient) InstallBucket(name string, frequency time.Duration, sampleCount int) error {
+	reqBody := body_types.BucketOptions{
+		Name:        name,
+		Granularity: body_types.Granularity{Granularity: frequency, Count: sampleCount},
+	}
+	resp, err := cl.request(routes.InstallBucket, reqBody)
+	if err != nil {
+		return err
+	}
+	if resp.Error {
+		return resp.GetMsgAsErr()
+	}
+	return nil
+}
+
 func (cl *DemmonClient) GetContinuousQueries() (*body_types.GetContinuousQueriesReply, error) {
 	resp, err := cl.request(routes.GetContinuousQueries, nil)
 	if err != nil {
@@ -235,7 +250,6 @@ func (cl *DemmonClient) GetContinuousQueries() (*body_types.GetContinuousQueries
 	if resp.Error {
 		return nil, resp.GetMsgAsErr()
 	}
-
 	respDecoded := &body_types.GetContinuousQueriesReply{}
 	err = decode(resp.Message, &respDecoded)
 	if err != nil {
@@ -332,9 +346,8 @@ func (cl *DemmonClient) request(reqType routes.RequestType, payload interface{})
 	cl.mutex.Unlock()
 	select {
 	case <-call.Done:
-	case <-time.After(2 * time.Second):
-		call.Error = errors.New("request timeout")
-
+	case <-time.After(cl.conf.RequestTimeout):
+		call.Error = fmt.Errorf("request timeout after %+v", cl.conf.RequestTimeout)
 	}
 	if call.Error != nil {
 		return nil, call.Error
@@ -435,7 +448,11 @@ func (cl *DemmonClient) read() {
 	cl.mutex.Lock()
 	for _, call := range cl.pending {
 		call.Error = err
-		call.Done <- true
+		select {
+		case call.Done <- true:
+		case <-time.After(1 * time.Second):
+			panic("Timed out propagating error to call")
+		}
 	}
 	cl.mutex.Unlock()
 }
