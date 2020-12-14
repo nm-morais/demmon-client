@@ -10,8 +10,7 @@ import (
 	"strings"
 	"time"
 
-	demmon_client "github.com/nm-morais/demmon-client/pkg"
-	"github.com/nm-morais/demmon-common/body_types"
+	demmonClient "github.com/nm-morais/demmon-client/pkg"
 )
 
 type Operation int
@@ -54,116 +53,107 @@ func readOp(reader *bufio.Reader) (*Operation, string, error) {
 }
 
 func printOps(f io.Writer) {
-	fmt.Fprintf(f, "Operations:\n")
+	_, _ = fmt.Fprintf(f, "Operations:\n")
 	for idx, op := range operations {
-		fmt.Fprintf(f, "%d) %+v\n", idx, op)
+		_, _ = fmt.Fprintf(f, "%d) %+v\n", idx, op)
 	}
 }
 
-func printNodeUpdates(nodeUps, nodeDowns chan body_types.NodeUpdates) {
-	f := bufio.NewWriter(os.Stdout)
-	for {
-		select {
-		case nodeUpdate := <-nodeUps:
-			fmt.Fprintln(f, "NODE UP")
-			fmt.Fprintln(f, "Node up: ", nodeUpdate.Node)
-			fmt.Fprintln(f, "View: ", nodeUpdate.View)
-		case nodeUpdate := <-nodeDowns:
-			fmt.Fprintln(f, "NODE DOWN")
-			fmt.Fprintln(f, "Node down: ", nodeUpdate.Node)
-			fmt.Fprintln(f, "View: ", nodeUpdate.View)
-		}
-		f.Flush()
-	}
-}
-
-func Repl(clientConf demmon_client.DemmonClientConf) {
+func Repl(clientConf demmonClient.DemmonClientConf) {
 	f := bufio.NewWriter(os.Stdout)
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Println("Demmon Shell")
 	// nodeUps, nodeDowns := demmon.GetPeerNotificationChans()
 	// go printNodeUpdates(nodeUps, nodeDowns)
-	c := demmon_client.New(clientConf)
+	c := demmonClient.New(clientConf)
 	err := c.ConnectTimeout(1 * time.Second)
 	if err != nil {
 		panic(err)
 	}
 	for {
 		printOps(f)
-		f.Flush()
+		_ = f.Flush()
 		op, args, err := readOp(reader)
 		if err != nil {
-			fmt.Fprintf(f, "got err: %+s\n", err)
+			_, _ = fmt.Fprintf(f, "got err: %s\n", err)
 		}
 		switch *op {
 		case metricsOp:
 			res, err := c.GetRegisteredMetrics()
 			if err != nil {
-				fmt.Fprintf(f, "got err: %+s\n", err)
+				_, _ = fmt.Fprintf(f, "got err: %s\n", err)
 			}
-			fmt.Fprintf(f, "\n")
+			_, _ = fmt.Fprintf(f, "\n")
 			for i, m := range res {
-				fmt.Fprintf(f, "metric %d: %s\n", i, m)
+				_, _ = fmt.Fprintf(f, "metric %d: %s\n", i, m)
 			}
-			fmt.Fprintf(f, "\n")
+			_, _ = fmt.Fprintf(f, "\n")
 		case inViewOp:
-			fmt.Fprintf(f, "%+v\n", c.GetInView())
+			_, _ = fmt.Fprintf(f, "%+v\n", c.GetInView())
 		case makeQuery:
 			argsSplit := strings.Split(args, " ")
 			if len(args) < 2 {
-				fmt.Fprintf(f, "Err: incorrect number of args, want: 2 got: %d\n", len(args))
+				_, _ = fmt.Fprintf(f, "Err: incorrect number of args, want: 2 got: %d\n", len(args))
 				continue
 			}
 			queryTimeoutDuration, err := strconv.ParseInt(argsSplit[0], 10, 64)
 			queryStr := strings.Join(argsSplit[1:], " ")
 			fmt.Println(queryStr)
 			if err != nil {
-				fmt.Fprintf(f, "got error: %s\n", err.Error())
+				_, _ = fmt.Fprintf(f, "got error: %s\n", err.Error())
 				continue
 			}
-			res, err := c.Query(queryStr, time.Duration(time.Duration(queryTimeoutDuration)*time.Second))
+			res, err := c.Query(queryStr, time.Duration(queryTimeoutDuration)*time.Second)
 			if err != nil {
-				fmt.Fprintf(f, "Got err: %s\n", err.Error())
+				_, _ = fmt.Fprintf(f, "Got err: %s\n", err.Error())
 				continue
 			}
-			fmt.Fprintf(f, "\ngot %d series in response\n", len(res))
+			_, _ = fmt.Fprintf(f, "\ngot %d series in response\n", len(res))
 			for _, ts := range res {
-				fmt.Fprintf(f, "ts: %+v\n", ts)
+				_, _ = fmt.Fprintf(f, "ts: %+v\n", ts)
 			}
 		case installContinuousQuery:
 			argsSplit := strings.Split(args, " ")
 			if len(args) < 4 {
-				fmt.Fprintf(f, "Err: incorrect number of args, want: 4 got: %d\n", len(args))
+				_, _ = fmt.Fprintf(f, "Err: incorrect number of args, want: 4 got: %d\n", len(args))
 				continue
 			}
 
 			outputMetricName := argsSplit[0]
 			queryTimeout, err := strconv.ParseInt(argsSplit[1], 10, 64)
 			if err != nil {
-				fmt.Fprintf(f, "got error: %s\n", err.Error())
+				_, _ = fmt.Fprintf(f, "got error: %s\n", err.Error())
 				continue
 			}
 			queryFrequencySeconds, err := strconv.ParseInt(argsSplit[2], 10, 64)
 			if err != nil {
-				fmt.Fprintf(f, "got error: %s\n", err.Error())
+				_, _ = fmt.Fprintf(f, "got error: %s\n", err.Error())
 				continue
 			}
 			outputMetricCount, err := strconv.ParseInt(argsSplit[3], 10, 64)
 			if err != nil {
-				fmt.Fprintf(f, "got error: %s\n", err.Error())
+				_, _ = fmt.Fprintf(f, "got error: %s\n", err.Error())
 				continue
 			}
 
 			queryStr := strings.Join(argsSplit[4:], " ")
-			res, err := c.InstallContinuousQuery(queryStr, "", time.Duration(queryFrequencySeconds), time.Duration(queryTimeout)*time.Second, outputMetricName, int(outputMetricCount), 3)
+			res, err := c.InstallContinuousQuery(
+				queryStr,
+				"",
+				time.Duration(queryFrequencySeconds),
+				time.Duration(queryTimeout)*time.Second,
+				outputMetricName,
+				int(outputMetricCount),
+				3,
+			)
 			if err != nil {
-				fmt.Fprintf(f, "Got err: %s\n", err.Error())
+				_, _ = fmt.Fprintf(f, "Got err: %s\n", err.Error())
 				continue
 			}
-			fmt.Fprintf(f, "\ngot response: %+v\n", res)
+			_, _ = fmt.Fprintf(f, "\ngot response: %+v\n", res)
 		default:
-			fmt.Fprintf(f, "No handler for operation: <%s>\n", op)
+			_, _ = fmt.Fprintf(f, "No handler for operation: <%s>\n", op)
 		}
-		f.Flush()
+		_= f.Flush()
 	}
 }

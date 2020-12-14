@@ -103,7 +103,7 @@ func (cl *DemmonClient) GetRegisteredMetrics() ([]string, error) {
 		return nil, resp.GetMsgAsErr()
 	}
 
-	respDecoded := []string{}
+	respDecoded := make([]string, 0)
 	err = decode(resp.Message, &respDecoded)
 	if resp.Error {
 		return nil, err
@@ -153,7 +153,7 @@ func (cl *DemmonClient) SubscribeQuery(expression string, timeout, repeatTime ti
 				querySub.ErrChan <- resp.GetMsgAsErr()
 			}
 
-			respDecoded := []*body_types.Timeseries{}
+			respDecoded := make([]*body_types.Timeseries, 0)
 			err = decode(resp.Message, &respDecoded)
 			if resp.Error {
 				querySub.ErrChan <- err
@@ -177,7 +177,7 @@ func (cl *DemmonClient) Query(expression string, timeout time.Duration) ([]body_
 	if resp.Error {
 		return nil, resp.GetMsgAsErr()
 	}
-	respDecoded := []body_types.Timeseries{}
+	respDecoded := make([]body_types.Timeseries, 0)
 	err = decode(resp.Message, &respDecoded)
 	if err != nil {
 		return nil, err
@@ -261,7 +261,13 @@ func (cl *DemmonClient) GetContinuousQueries() (*body_types.GetContinuousQueries
 	return respDecoded, nil
 }
 
-func (cl *DemmonClient) InstallCustomInterestSet(expression string, expressionTimeout time.Duration, outputMetricName string, hosts []*body_types.Peer, outputMetricGranularity body_types.Granularity) (uint64, error) {
+func (cl *DemmonClient) InstallCustomInterestSet(
+	expression string,
+	expressionTimeout time.Duration,
+	outputMetricName string,
+	hosts []*body_types.Peer,
+	outputMetricGranularity body_types.Granularity,
+) (uint64, error) {
 	set := body_types.CustomInterestSet{
 		Query: body_types.RunnableExpression{Timeout: expressionTimeout, Expression: expression},
 		Hosts: hosts,
@@ -286,7 +292,14 @@ func (cl *DemmonClient) InstallCustomInterestSet(expression string, expressionTi
 	return respDecoded.SetId, nil
 }
 
-func (cl *DemmonClient) InstallNeighborhoodInterestSet(expression string, expressionTimeout time.Duration, ttl int, outputMetricName string, runFrequency time.Duration, outputMetricStorageCount, maxQueryRetries int) (uint64, error) {
+func (cl *DemmonClient) InstallNeighborhoodInterestSet(
+	expression string,
+	expressionTimeout time.Duration,
+	ttl int,
+	outputMetricName string,
+	runFrequency time.Duration,
+	outputMetricStorageCount, maxQueryRetries int,
+) (uint64, error) {
 	set := body_types.NeighborhoodInterestSet{
 		MaxRetries: maxQueryRetries,
 		Query:      body_types.RunnableExpression{Timeout: expressionTimeout, Expression: expression},
@@ -314,16 +327,20 @@ func (cl *DemmonClient) InstallNeighborhoodInterestSet(expression string, expres
 	return respDecoded.SetId, nil
 }
 
-func (c *DemmonClient) ConnectTimeout(timeout time.Duration) error {
-	u := url.URL{Host: fmt.Sprintf("%s:%d", c.conf.DemmonHostAddr, c.conf.DemmonPort), Path: routes.Dial, Scheme: "ws"}
+func (cl *DemmonClient) ConnectTimeout(timeout time.Duration) error {
+	u := url.URL{
+		Host: fmt.Sprintf("%s:%d", cl.conf.DemmonHostAddr, cl.conf.DemmonPort),
+		Path: routes.Dial,
+		Scheme: "ws",
+	}
 	ctx, cancel := context.WithTimeout(context.TODO(), timeout)
 	defer cancel()
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), http.Header{})
 	if err != nil {
 		return err
 	}
-	c.conn = conn
-	go c.read()
+	cl.conn = conn
+	go cl.read()
 	return err
 }
 
@@ -355,7 +372,11 @@ func (cl *DemmonClient) request(reqType routes.RequestType, payload interface{})
 	return &call.Res, nil
 }
 
-func (cl *DemmonClient) subscribe(reqType routes.RequestType, payload interface{}) (*body_types.Response, *Subscription, error) {
+func (cl *DemmonClient) subscribe(reqType routes.RequestType, payload interface{}) (
+	*body_types.Response,
+	*Subscription,
+	error,
+) {
 	if cl.conn == nil {
 		return nil, nil, ErrNotConnected
 	}
@@ -458,12 +479,15 @@ func (cl *DemmonClient) read() {
 }
 
 func decode(input interface{}, result interface{}) error {
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		Metadata: nil,
-		DecodeHook: mapstructure.ComposeDecodeHookFunc(
-			toTimeHookFunc()),
-		Result: result,
-	})
+	decoder, err := mapstructure.NewDecoder(
+		&mapstructure.DecoderConfig{
+			Metadata: nil,
+			DecodeHook: mapstructure.ComposeDecodeHookFunc(
+				toTimeHookFunc(),
+			),
+			Result: result,
+		},
+	)
 	if err != nil {
 		return err
 	}
@@ -478,7 +502,8 @@ func toTimeHookFunc() mapstructure.DecodeHookFunc {
 	return func(
 		f reflect.Type,
 		t reflect.Type,
-		data interface{}) (interface{}, error) {
+		data interface{},
+	) (interface{}, error) {
 		if t != reflect.TypeOf(time.Time{}) {
 			return data, nil
 		}
