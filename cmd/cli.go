@@ -89,7 +89,11 @@ func Repl(clientConf demmonClient.DemmonClientConf) {
 			}
 			_, _ = fmt.Fprintf(f, "\n")
 		case inViewOp:
-			_, _ = fmt.Fprintf(f, "%+v\n", c.GetInView())
+			view, err := c.GetInView()
+			if err != nil {
+				_, _ = fmt.Fprintf(f, "got err: %s\n", err)
+			}
+			_, _ = fmt.Fprintf(f, "%+v\n", view)
 		case makeQuery:
 			argsSplit := strings.Split(args, " ")
 			if len(args) < 2 {
@@ -154,6 +158,6 @@ func Repl(clientConf demmonClient.DemmonClientConf) {
 		default:
 			_, _ = fmt.Fprintf(f, "No handler for operation: <%s>\n", op)
 		}
-		_= f.Flush()
+		_ = f.Flush()
 	}
 }

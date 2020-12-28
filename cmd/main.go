@@ -15,7 +15,6 @@ var (
 )
 
 func main() {
-
 	flag.StringVar(&host, "h", "", "The host of the demmon http service")
 	flag.IntVar(&port, "p", 0, "The port of the demmon http service")
 	flag.Parse()
