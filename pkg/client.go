@@ -327,6 +327,7 @@ func (cl *DemmonClient) InstallBroadcastMessageHandler(messageID uint64) (chan b
 		for v := range sub.ContentChan {
 			update := body_types.Message{}
 			err = decode(v, &update)
+
 			if err != nil {
 				panic(err) // TODO error handling
 			}
@@ -412,7 +413,7 @@ func (cl *DemmonClient) InstallCustomInterestSet(
 			errMsg := ""
 			err = decode(v, &errMsg)
 			if err != nil {
-				panic(err) // TODO error handling
+				panic(err)
 			}
 			errChan <- err
 			return
@@ -438,6 +439,26 @@ func (cl *DemmonClient) InstallNeighborhoodInterestSet(is *body_types.Neighborho
 	if resp.Error {
 		return math.MaxUint64, err
 	}
+	return respDecoded.SetID, nil
+}
+
+func (cl *DemmonClient) InstallTreeAggregationFunction(is *body_types.TreeAggregationSet) (uint64, error) {
+	resp, err := cl.request(routes.InstallTreeAggregationFunction, is)
+	if err != nil {
+		return math.MaxUint64, err
+	}
+
+	if resp.Error {
+		return math.MaxUint64, resp.GetMsgAsErr()
+	}
+
+	respDecoded := body_types.InstallInterestSetReply{}
+	err = decode(resp.Message, &respDecoded)
+
+	if resp.Error {
+		return math.MaxUint64, err
+	}
+
 	return respDecoded.SetID, nil
 }
 
@@ -547,15 +568,18 @@ func (cl *DemmonClient) read() {
 	for err == nil {
 		var res body_types.Response
 		err = cl.conn.ReadJSON(&res)
+
 		if err != nil {
 			err = fmt.Errorf("error reading message: %q", err)
 			continue
 		}
+
 		if res.Push {
 			fmt.Printf("Got push: %+v\n", res)
 			cl.mutex.Lock()
 			sub := cl.subs[res.ID]
 			cl.mutex.Unlock()
+
 			if sub == nil {
 				panic(ErrSubscriptionNotFound) // TODO remove
 				fmt.Println(ErrSubscriptionNotFound)
@@ -567,6 +591,7 @@ func (cl *DemmonClient) read() {
 			case <-time.After(1 * time.Second):
 				err = errors.New("could not deliver subscription result because there was no listener")
 			}
+
 			continue
 		}
 
