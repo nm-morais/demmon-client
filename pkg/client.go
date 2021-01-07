@@ -141,7 +141,11 @@ func (cl *DemmonClient) SubscribeNodeUpdates() (*body_types.View, error, chan in
 				if err != nil {
 					panic(err) // TODO error handling
 				}
-				nodeUpdateChan <- update
+				select {
+				case nodeUpdateChan <- update:
+				case <-sub.FinishChan:
+					return
+				}
 			case <-sub.FinishChan:
 				return
 			}
@@ -347,7 +351,11 @@ func (cl *DemmonClient) InstallBroadcastMessageHandler(messageID uint64) (chan b
 				if err != nil {
 					panic(err) // TODO error handling
 				}
-				msgChan <- update
+				select {
+				case msgChan <- update:
+				case <-sub.FinishChan:
+					return
+				}
 			case <-sub.FinishChan:
 				return
 			}
@@ -393,21 +401,21 @@ func (cl *DemmonClient) GetContinuousQueries() (*body_types.GetContinuousQueries
 	return respDecoded, nil
 }
 
-func (cl *DemmonClient) InstallCustomInterestSet(set body_types.CustomInterestSet) (uint64, chan error, chan interface{}, error) {
+func (cl *DemmonClient) InstallCustomInterestSet(set body_types.CustomInterestSet) (int64, chan error, chan interface{}, error) {
 	resp, sub, err := cl.subscribe(routes.InstallCustomInterestSet, set)
 	if err != nil {
-		return math.MaxUint64, nil, nil, err
+		return math.MaxInt64, nil, nil, err
 	}
 
 	if resp.Error {
-		return math.MaxUint64, nil, nil, resp.GetMsgAsErr()
+		return math.MaxInt64, nil, nil, resp.GetMsgAsErr()
 	}
 
 	respDecoded := body_types.InstallInterestSetReply{}
 	err = decode(resp.Message, &respDecoded)
 
 	if resp.Error {
-		return math.MaxUint64, nil, nil, err
+		return math.MaxInt64, nil, nil, err
 	}
 
 	errChan := make(chan error, 1)
@@ -418,8 +426,11 @@ func (cl *DemmonClient) InstallCustomInterestSet(set body_types.CustomInterestSe
 			case v := <-sub.ContentChan:
 				errMsg := ""
 				err = decode(v, &errMsg)
-				errChan <- err
-				return
+				select {
+				case errChan <- err:
+				case <-sub.FinishChan:
+					return
+				}
 			case <-sub.FinishChan:
 				return
 			}
@@ -429,63 +440,76 @@ func (cl *DemmonClient) InstallCustomInterestSet(set body_types.CustomInterestSe
 	return respDecoded.SetID, errChan, sub.FinishChan, err
 }
 
-func (cl *DemmonClient) InstallNeighborhoodInterestSet(is *body_types.NeighborhoodInterestSet) (uint64, error) {
+func (cl *DemmonClient) InstallNeighborhoodInterestSet(is *body_types.NeighborhoodInterestSet) (int64, error) {
 	resp, err := cl.request(routes.InstallNeighborhoodInterestSet, is)
 	if err != nil {
-		return math.MaxUint64, err
+		return math.MaxInt64, err
 	}
 
 	if resp.Error {
-		return math.MaxUint64, resp.GetMsgAsErr()
+		return math.MaxInt64, resp.GetMsgAsErr()
 	}
 
 	respDecoded := body_types.InstallInterestSetReply{}
 	err = decode(resp.Message, &respDecoded)
 
 	if resp.Error {
-		return math.MaxUint64, err
+		return math.MaxInt64, err
 	}
 	return respDecoded.SetID, nil
 }
 
-func (cl *DemmonClient) InstallTreeAggregationFunction(is *body_types.TreeAggregationSet) (uint64, error) {
+func (cl *DemmonClient) InstallTreeAggregationFunction(is *body_types.TreeAggregationSet) (int64, error) {
 	resp, err := cl.request(routes.InstallTreeAggregationFunction, is)
 	if err != nil {
-		return math.MaxUint64, err
+		return math.MaxInt64, err
 	}
 
 	if resp.Error {
-		return math.MaxUint64, resp.GetMsgAsErr()
+		return math.MaxInt64, resp.GetMsgAsErr()
 	}
 
 	respDecoded := body_types.InstallInterestSetReply{}
 	err = decode(resp.Message, &respDecoded)
 
 	if resp.Error {
-		return math.MaxUint64, err
+		return math.MaxInt64, err
 	}
 
 	return respDecoded.SetID, nil
 }
 
-func (cl *DemmonClient) RemoveCustomInterestSet(id uint64) (uint64, error) {
-	resp, err := cl.request(routes.InstallTreeAggregationFunction, is)
+func (cl *DemmonClient) RemoveCustomInterestSet(id int64) (int64, error) {
+	resp, err := cl.request(routes.RemoveCustomInterestSet, body_types.RemoveInterestSetReq{id})
 	if err != nil {
-		return math.MaxUint64, err
+		return math.MaxInt64, err
 	}
 
 	if resp.Error {
-		return math.MaxUint64, resp.GetMsgAsErr()
+		return math.MaxInt64, resp.GetMsgAsErr()
 	}
 
 	respDecoded := body_types.InstallInterestSetReply{}
 	err = decode(resp.Message, &respDecoded)
 
 	if resp.Error {
-		return math.MaxUint64, err
+		return math.MaxInt64, err
 	}
 
 	return respDecoded.SetID, nil
+}
+
+func (cl *DemmonClient) UpdateCustomInterestSet(updateReq body_types.UpdateCustomInterestSetReq) error {
+	resp, err := cl.request(routes.RemoveCustomInterestSet, updateReq)
+	if err != nil {
+		return err
+	}
+
+	if resp.Error {
+		return resp.GetMsgAsErr()
+	}
+
+	return nil
 }
 
 func (cl *DemmonClient) ConnectTimeout(timeout time.Duration) error {
@@ -704,6 +728,10 @@ func toTimeHookFunc() mapstructure.DecodeHookFunc {
 		}
 		// Convert it by parsing
 	}
+}
+
+func (cl *DemmonClient) Disconnect() {
+	cl.conn.Close()
 }
 
 // func (cl *DemmonClient) RegisterMetrics(metrics []body_types.MetricMetadata) error {
