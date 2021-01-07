@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"net"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -27,8 +26,9 @@ var (
 )
 
 type QuerySubscription struct {
-	ResChan chan []body_types.TimeseriesDTO
-	ErrChan chan error
+	FinishChan chan interface{}
+	ResChan    chan []body_types.TimeseriesDTO
+	ErrChan    chan error
 }
 
 // Call represents an active request
@@ -41,6 +41,7 @@ type Call struct {
 
 // Call represents an active request
 type Subscription struct {
+	FinishChan  chan interface{}
 	ContentChan chan interface{}
 	Id          uint64
 }
@@ -111,39 +112,43 @@ func (cl *DemmonClient) GetInView() (*body_types.View, error) {
 	return respDecoded, nil
 }
 
-func (cl *DemmonClient) SubscribeNodeUpdates() (*body_types.View, error, chan body_types.NodeUpdates) {
+func (cl *DemmonClient) SubscribeNodeUpdates() (*body_types.View, error, chan interface{}, chan body_types.NodeUpdates) {
 
 	resp, sub, err := cl.subscribe(routes.MembershipUpdates, nil)
 	if err != nil {
-		return nil, err, nil
+		return nil, err, nil, nil
 	}
 
 	if resp.Error {
-		return nil, resp.GetMsgAsErr(), nil
+		return nil, resp.GetMsgAsErr(), nil, nil
 	}
 
 	respDecoded := &body_types.View{}
 	err = decode(resp.Message, respDecoded)
 
 	if resp.Error {
-		return nil, err, nil
+		return nil, err, nil, nil
 	}
 
 	nodeUpdateChan := make(chan body_types.NodeUpdates, 1)
 
 	go func() {
-		for v := range sub.ContentChan {
-			update := body_types.NodeUpdates{}
-			err = decode(v, &update)
-
-			if err != nil {
-				panic(err) // TODO error handling
+		for {
+			select {
+			case v := <-sub.ContentChan:
+				update := body_types.NodeUpdates{}
+				err = decode(v, &update)
+				if err != nil {
+					panic(err) // TODO error handling
+				}
+				nodeUpdateChan <- update
+			case <-sub.FinishChan:
+				return
 			}
-			nodeUpdateChan <- update
 		}
 	}()
 
-	return respDecoded, err, nodeUpdateChan
+	return respDecoded, err, sub.FinishChan, nodeUpdateChan
 }
 
 func (cl *DemmonClient) GetRegisteredMetrics() ([]string, error) {
@@ -187,10 +192,12 @@ func (cl *DemmonClient) SubscribeQuery(expression string, timeout, repeatTime ti
 		},
 	}
 	querySub := QuerySubscription{
-		ResChan: make(chan []body_types.TimeseriesDTO),
-		ErrChan: make(chan error),
+		FinishChan: make(chan interface{}),
+		ResChan:    make(chan []body_types.TimeseriesDTO),
+		ErrChan:    make(chan error),
 	}
 	go func() {
+
 		defer close(querySub.ErrChan)
 		defer close(querySub.ResChan)
 
@@ -202,7 +209,10 @@ func (cl *DemmonClient) SubscribeQuery(expression string, timeout, repeatTime ti
 			}
 
 			if resp.Error {
-				querySub.ErrChan <- resp.GetMsgAsErr()
+				select {
+				case querySub.ErrChan <- resp.GetMsgAsErr():
+				default:
+				}
 				return
 			}
 
@@ -289,6 +299,7 @@ func (cl *DemmonClient) InstallContinuousQuery(
 	if resp.Error {
 		return math.MaxUint64, err
 	}
+
 	return respDecoded.TaskID, nil
 }
 
@@ -298,6 +309,7 @@ func (cl *DemmonClient) InstallBucket(name string, frequency time.Duration, samp
 		Granularity: body_types.Granularity{Granularity: frequency, Count: sampleCount},
 	}
 	resp, err := cl.request(routes.InstallBucket, reqBody)
+
 	if err != nil {
 		return err
 	}
@@ -305,36 +317,44 @@ func (cl *DemmonClient) InstallBucket(name string, frequency time.Duration, samp
 	if resp.Error {
 		return resp.GetMsgAsErr()
 	}
+
 	return nil
 }
 
-func (cl *DemmonClient) InstallBroadcastMessageHandler(messageID uint64) (chan body_types.Message, error) {
+func (cl *DemmonClient) InstallBroadcastMessageHandler(messageID uint64) (chan body_types.Message, chan interface{}, error) {
 	reqBody := body_types.InstallMessageHandlerRequest{
 		ID: messageID,
 	}
 
 	resp, sub, err := cl.subscribe(routes.InstallBroadcastMessageHandler, reqBody)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if resp.Error {
-		return nil, resp.GetMsgAsErr()
+		return nil, nil, resp.GetMsgAsErr()
 	}
 
 	msgChan := make(chan body_types.Message, 1)
-	go func() {
-		for v := range sub.ContentChan {
-			update := body_types.Message{}
-			err = decode(v, &update)
 
-			if err != nil {
-				panic(err) // TODO error handling
+	go func() {
+		for {
+			select {
+			case v := <-sub.ContentChan:
+				update := body_types.Message{}
+				err = decode(v, &update)
+
+				if err != nil {
+					panic(err) // TODO error handling
+				}
+				msgChan <- update
+			case <-sub.FinishChan:
+				return
 			}
-			msgChan <- update
 		}
 	}()
-	return msgChan, err
+
+	return msgChan, sub.FinishChan, err
 }
 
 func (cl *DemmonClient) BroadcastMessage(reqBody body_types.Message) error {
@@ -373,54 +393,40 @@ func (cl *DemmonClient) GetContinuousQueries() (*body_types.GetContinuousQueries
 	return respDecoded, nil
 }
 
-func (cl *DemmonClient) InstallCustomInterestSet(
-	expression string,
-	expressionTimeout time.Duration,
-	outputMetricName string,
-	hosts []net.IP,
-	outputMetricGranularity body_types.Granularity,
-) (uint64, chan error, error) {
-	set := body_types.CustomInterestSet{
-		IS: body_types.InterestSet{
-			Query: body_types.RunnableExpression{Timeout: expressionTimeout, Expression: expression},
-			OutputBucketOpts: body_types.BucketOptions{
-				Name:        outputMetricName,
-				Granularity: outputMetricGranularity,
-			},
-		},
-		Hosts: hosts,
-	}
+func (cl *DemmonClient) InstallCustomInterestSet(set body_types.CustomInterestSet) (uint64, chan error, chan interface{}, error) {
 	resp, sub, err := cl.subscribe(routes.InstallCustomInterestSet, set)
 	if err != nil {
-		return math.MaxUint64, nil, err
+		return math.MaxUint64, nil, nil, err
 	}
 
 	if resp.Error {
-		return math.MaxUint64, nil, resp.GetMsgAsErr()
+		return math.MaxUint64, nil, nil, resp.GetMsgAsErr()
 	}
 
 	respDecoded := body_types.InstallInterestSetReply{}
 	err = decode(resp.Message, &respDecoded)
 
 	if resp.Error {
-		return math.MaxUint64, nil, err
+		return math.MaxUint64, nil, nil, err
 	}
 
 	errChan := make(chan error, 1)
 
 	go func() {
-		for v := range sub.ContentChan {
-			errMsg := ""
-			err = decode(v, &errMsg)
-			if err != nil {
-				panic(err)
+		for {
+			select {
+			case v := <-sub.ContentChan:
+				errMsg := ""
+				err = decode(v, &errMsg)
+				errChan <- err
+				return
+			case <-sub.FinishChan:
+				return
 			}
-			errChan <- err
-			return
 		}
 	}()
 
-	return respDecoded.SetID, errChan, nil
+	return respDecoded.SetID, errChan, sub.FinishChan, err
 }
 
 func (cl *DemmonClient) InstallNeighborhoodInterestSet(is *body_types.NeighborhoodInterestSet) (uint64, error) {
@@ -443,6 +449,26 @@ func (cl *DemmonClient) InstallNeighborhoodInterestSet(is *body_types.Neighborho
 }
 
 func (cl *DemmonClient) InstallTreeAggregationFunction(is *body_types.TreeAggregationSet) (uint64, error) {
+	resp, err := cl.request(routes.InstallTreeAggregationFunction, is)
+	if err != nil {
+		return math.MaxUint64, err
+	}
+
+	if resp.Error {
+		return math.MaxUint64, resp.GetMsgAsErr()
+	}
+
+	respDecoded := body_types.InstallInterestSetReply{}
+	err = decode(resp.Message, &respDecoded)
+
+	if resp.Error {
+		return math.MaxUint64, err
+	}
+
+	return respDecoded.SetID, nil
+}
+
+func (cl *DemmonClient) RemoveCustomInterestSet(id uint64) (uint64, error) {
 	resp, err := cl.request(routes.InstallTreeAggregationFunction, is)
 	if err != nil {
 		return math.MaxUint64, err
@@ -551,6 +577,12 @@ func (cl *DemmonClient) subscribe(reqType routes.RequestType, payload interface{
 		cl.mutex.Unlock()
 		call.Error = ErrTimeout
 		return nil, nil, call.Error
+	}
+	if !call.Res.Error {
+		go func() {
+			<-newSub.FinishChan
+			cl.clearSub(newSub)
+		}()
 	}
 	return &call.Res, newSub, nil
 }
