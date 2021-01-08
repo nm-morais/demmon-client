@@ -35,7 +35,7 @@ type QuerySubscription struct {
 type Call struct {
 	Req   body_types.Request
 	Res   body_types.Response
-	Done  chan bool
+	Done  chan interface{}
 	Error error
 }
 
@@ -49,7 +49,7 @@ type Subscription struct {
 func newCall(req body_types.Request) *Call {
 	return &Call{
 		Req:  req,
-		Done: make(chan bool),
+		Done: make(chan interface{}),
 	}
 }
 
@@ -459,6 +459,25 @@ func (cl *DemmonClient) InstallNeighborhoodInterestSet(is *body_types.Neighborho
 	return respDecoded.SetID, nil
 }
 
+func (cl *DemmonClient) InstallGlobalAggregationFunction(is *body_types.GlobalAggregationFunction) (int64, error) {
+	resp, err := cl.request(routes.InstallGlobalAggregationFunction, is)
+	if err != nil {
+		return math.MaxInt64, err
+	}
+
+	if resp.Error {
+		return math.MaxInt64, resp.GetMsgAsErr()
+	}
+
+	respDecoded := body_types.InstallInterestSetReply{}
+	err = decode(resp.Message, &respDecoded)
+
+	if resp.Error {
+		return math.MaxInt64, err
+	}
+	return respDecoded.SetID, nil
+}
+
 func (cl *DemmonClient) InstallTreeAggregationFunction(is *body_types.TreeAggregationSet) (int64, error) {
 	resp, err := cl.request(routes.InstallTreeAggregationFunction, is)
 	if err != nil {
@@ -552,6 +571,11 @@ func (cl *DemmonClient) request(reqType routes.RequestType, payload interface{})
 		return nil, err
 	}
 	cl.mutex.Unlock()
+	defer func() {
+		cl.mutex.Lock()
+		delete(cl.pending, id)
+		cl.mutex.Unlock()
+	}()
 	select {
 	case <-call.Done:
 	case <-time.After(cl.conf.RequestTimeout):
@@ -662,24 +686,26 @@ func (cl *DemmonClient) read() {
 
 		if res.Error {
 			call.Error = errors.New(res.Message.(string))
-			call.Done <- true
+			close(call.Done)
 		} else {
 			call.Res = res
-			call.Done <- true
+			close(call.Done)
 		}
 	}
-
-	fmt.Println("Read routine exiting due to err: ", err)
-	cl.mutex.Lock()
-	for _, call := range cl.pending {
-		call.Error = err
-		select {
-		case call.Done <- true:
-		case <-time.After(1 * time.Second):
-			panic("Timed out propagating error to call") // TODO remove
-		}
-	}
-	cl.mutex.Unlock()
+	// TODO should cleanup pending calls ??
+	// fmt.Println("Read routine exiting due to err: ", err)
+	// cl.mutex.Lock()
+	// for _, call := range cl.pending {
+	// 	call.Error = err
+	// 	close(call.Done)
+	// 	select {
+	// 	case <-call.Done:
+	// 		delete(cl.pending, res.ID)
+	// 	case <-time.After(1 * time.Second):
+	// 		panic("Timed out propagating error to call") // TODO remove
+	// 	}
+	// }
+	// cl.mutex.Unlock()
 }
 
 func decode(input, result interface{}) error {
