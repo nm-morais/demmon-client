@@ -133,20 +133,30 @@ func (cl *DemmonClient) SubscribeNodeUpdates() (*body_types.View, error, chan in
 	nodeUpdateChan := make(chan body_types.NodeUpdates, 1)
 
 	go func() {
+		updates := []body_types.NodeUpdates{}
+
+		handleUpdateFunc := func(nextUpdate interface{}) {
+			update := body_types.NodeUpdates{}
+			err = decode(nextUpdate, &update)
+
+			if err != nil {
+				panic(err)
+			}
+
+			updates = append(updates, update)
+		}
+
 		for {
+			if len(updates) == 0 {
+				nextUpdate := <-sub.ContentChan
+				handleUpdateFunc(nextUpdate)
+			}
 			select {
 			case v := <-sub.ContentChan:
-				update := body_types.NodeUpdates{}
-				err = decode(v, &update)
-				if err != nil {
-					panic(err) // TODO error handling
-				}
-				select {
-				case nodeUpdateChan <- update:
-				case <-sub.FinishChan:
-					return
-				}
+				handleUpdateFunc(v)
+			case nodeUpdateChan <- updates[0]:
 			case <-sub.FinishChan:
+				updates = nil
 				return
 			}
 		}
