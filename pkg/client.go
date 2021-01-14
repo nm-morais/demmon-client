@@ -155,6 +155,7 @@ func (cl *DemmonClient) SubscribeNodeUpdates() (*body_types.View, error, chan in
 			case v := <-sub.ContentChan:
 				handleUpdateFunc(v)
 			case nodeUpdateChan <- updates[0]:
+				updates = updates[1:]
 			case <-sub.FinishChan:
 				updates = nil
 				return
