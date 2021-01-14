@@ -469,6 +469,18 @@ func (cl *DemmonClient) InstallNeighborhoodInterestSet(is *body_types.Neighborho
 	return respDecoded.SetID, nil
 }
 
+func (cl *DemmonClient) StartBabel() error {
+	resp, err := cl.request(routes.StartBabel, nil)
+	if err != nil {
+		return err
+	}
+
+	if resp.Error {
+		return resp.GetMsgAsErr()
+	}
+	return nil
+}
+
 func (cl *DemmonClient) InstallGlobalAggregationFunction(is *body_types.GlobalAggregationFunction) (int64, error) {
 	resp, err := cl.request(routes.InstallGlobalAggregationFunction, is)
 	if err != nil {
@@ -671,8 +683,8 @@ func (cl *DemmonClient) read() {
 			cl.mutex.Unlock()
 
 			if sub == nil {
-				panic(ErrSubscriptionNotFound) // TODO remove
 				fmt.Println(ErrSubscriptionNotFound)
+				panic(ErrSubscriptionNotFound) // TODO remove
 				continue
 			}
 			select {
