@@ -77,6 +77,7 @@ type DemmonClient struct {
 
 	nodeUps   chan body_types.NodeUpdates
 	nodeDowns chan body_types.NodeUpdates
+	sync.Mutex
 }
 
 func New(conf DemmonClientConf) *DemmonClient {
@@ -88,6 +89,7 @@ func New(conf DemmonClientConf) *DemmonClient {
 		pending:   make(map[uint64]*Call),
 		nodeUps:   make(chan body_types.NodeUpdates),
 		nodeDowns: make(chan body_types.NodeUpdates),
+		Mutex:     sync.Mutex{},
 	}
 	return cl
 }
@@ -142,7 +144,6 @@ func (cl *DemmonClient) SubscribeNodeUpdates() (*body_types.View, error, chan in
 			if err != nil {
 				panic(err)
 			}
-
 			updates = append(updates, update)
 		}
 
@@ -554,6 +555,65 @@ func (cl *DemmonClient) UpdateCustomInterestSet(updateReq body_types.UpdateCusto
 	return nil
 }
 
+func (cl *DemmonClient) InstallAlarm(alarm *body_types.InstallAlarmRequest) (int64, chan bool, chan error, chan interface{}, error) {
+	resp, sub, err := cl.subscribe(routes.InstallAlarm, alarm)
+	if err != nil {
+		return math.MaxInt64, nil, nil, nil, err
+	}
+
+	if resp.Error {
+		return math.MaxInt64, nil, nil, nil, resp.GetMsgAsErr()
+	}
+
+	respDecoded := body_types.InstallAlarmReply{}
+	err = decode(resp.Message, &respDecoded)
+
+	if resp.Error {
+		return math.MaxInt64, nil, nil, nil, err
+	}
+
+	alarmTriggerChan := make(chan bool)
+	alarmErrorChan := make(chan error)
+
+	go func() {
+		updates := []body_types.AlarmUpdate{}
+		handleUpdateFunc := func(nextUpdate interface{}) {
+			update := body_types.AlarmUpdate{}
+			err = decode(nextUpdate, &update)
+
+			if err != nil {
+				panic(err)
+			}
+
+			if update.Error {
+				alarmErrorChan <- errors.New(update.ErrorMsg)
+				return
+			}
+
+			updates = append(updates, update)
+		}
+
+		for {
+			if len(updates) == 0 {
+				nextUpdate := <-sub.ContentChan
+				handleUpdateFunc(nextUpdate)
+			}
+
+			select {
+			case v := <-sub.ContentChan:
+				handleUpdateFunc(v)
+			case alarmTriggerChan <- updates[0].Trigger:
+				updates = updates[1:]
+			case <-sub.FinishChan:
+				updates = nil
+				return
+			}
+		}
+	}()
+
+	return respDecoded.ID, alarmTriggerChan, alarmErrorChan, sub.FinishChan, err
+}
+
 func (cl *DemmonClient) ConnectTimeout(timeout time.Duration) error {
 	u := url.URL{
 		Host:   fmt.Sprintf("%s:%d", cl.conf.DemmonHostAddr, cl.conf.DemmonPort),
@@ -655,6 +715,7 @@ func (cl *DemmonClient) subscribe(reqType routes.RequestType, payload interface{
 			cl.clearSub(newSub)
 		}()
 	}
+
 	return &call.Res, newSub, nil
 }
 
