@@ -523,7 +523,7 @@ func (cl *DemmonClient) InstallTreeAggregationFunction(is *body_types.TreeAggreg
 }
 
 func (cl *DemmonClient) RemoveCustomInterestSet(id int64) (int64, error) {
-	resp, err := cl.request(routes.RemoveCustomInterestSet, body_types.RemoveInterestSetReq{id})
+	resp, err := cl.request(routes.RemoveCustomInterestSet, body_types.RemoveResourceRequest{id})
 	if err != nil {
 		return math.MaxInt64, err
 	}
@@ -532,14 +532,34 @@ func (cl *DemmonClient) RemoveCustomInterestSet(id int64) (int64, error) {
 		return math.MaxInt64, resp.GetMsgAsErr()
 	}
 
-	respDecoded := body_types.InstallInterestSetReply{}
+	respDecoded := body_types.RemoveResourceReply{}
 	err = decode(resp.Message, &respDecoded)
 
 	if resp.Error {
 		return math.MaxInt64, err
 	}
 
-	return respDecoded.SetID, nil
+	return respDecoded.ResourceID, nil
+}
+
+func (cl *DemmonClient) RemoveAlarm(id int64) (int64, error) {
+	resp, err := cl.request(routes.RemoveCustomInterestSet, body_types.RemoveResourceRequest{id})
+	if err != nil {
+		return math.MaxInt64, err
+	}
+
+	if resp.Error {
+		return math.MaxInt64, resp.GetMsgAsErr()
+	}
+
+	respDecoded := body_types.RemoveResourceReply{}
+	err = decode(resp.Message, &respDecoded)
+
+	if resp.Error {
+		return math.MaxInt64, err
+	}
+
+	return respDecoded.ResourceID, nil
 }
 
 func (cl *DemmonClient) UpdateCustomInterestSet(updateReq body_types.UpdateCustomInterestSetReq) error {
@@ -556,6 +576,7 @@ func (cl *DemmonClient) UpdateCustomInterestSet(updateReq body_types.UpdateCusto
 }
 
 func (cl *DemmonClient) InstallAlarm(alarm *body_types.InstallAlarmRequest) (int64, chan bool, chan error, chan interface{}, error) {
+
 	resp, sub, err := cl.subscribe(routes.InstallAlarm, alarm)
 	if err != nil {
 		return math.MaxInt64, nil, nil, nil, err
@@ -584,12 +605,6 @@ func (cl *DemmonClient) InstallAlarm(alarm *body_types.InstallAlarmRequest) (int
 			if err != nil {
 				panic(err)
 			}
-
-			if update.Error {
-				alarmErrorChan <- errors.New(update.ErrorMsg)
-				return
-			}
-
 			updates = append(updates, update)
 		}
 
@@ -597,6 +612,14 @@ func (cl *DemmonClient) InstallAlarm(alarm *body_types.InstallAlarmRequest) (int
 			if len(updates) == 0 {
 				nextUpdate := <-sub.ContentChan
 				handleUpdateFunc(nextUpdate)
+				continue
+			}
+
+			update := updates[0]
+			if update.Error {
+				alarmErrorChan <- fmt.Errorf("%s", update.ErrorMsg)
+				updates = nil
+				return
 			}
 
 			select {
@@ -739,14 +762,12 @@ func (cl *DemmonClient) read() {
 		}
 
 		if res.Push {
-			fmt.Printf("Got push: %+v\n", res)
 			cl.mutex.Lock()
 			sub := cl.subs[res.ID]
 			cl.mutex.Unlock()
 
 			if sub == nil {
 				fmt.Println(ErrSubscriptionNotFound)
-				panic(ErrSubscriptionNotFound) // TODO remove
 				continue
 			}
 			select {
