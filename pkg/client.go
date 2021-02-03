@@ -336,7 +336,7 @@ func (cl *DemmonClient) InstallBucket(name string, frequency time.Duration, samp
 	return nil
 }
 
-func (cl *DemmonClient) InstallBroadcastMessageHandler(messageID uint64) (chan body_types.Message, chan interface{}, error) {
+func (cl *DemmonClient) InstallBroadcastMessageHandler(messageID string) (chan body_types.Message, chan interface{}, error) {
 	reqBody := body_types.InstallMessageHandlerRequest{
 		ID: messageID,
 	}
