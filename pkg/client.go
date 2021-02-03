@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -43,7 +42,7 @@ type Call struct {
 type Subscription struct {
 	FinishChan  chan interface{}
 	ContentChan chan interface{}
-	Id          uint64
+	Id          string
 }
 
 func newCall(req body_types.Request) *Call {
@@ -53,7 +52,7 @@ func newCall(req body_types.Request) *Call {
 	}
 }
 
-func newSub(id uint64) *Subscription {
+func newSub(id string) *Subscription {
 	return &Subscription{
 		Id:          id,
 		ContentChan: make(chan interface{}),
@@ -71,8 +70,8 @@ type DemmonClient struct {
 
 	mutex   sync.Mutex
 	conn    *websocket.Conn
-	pending map[uint64]*Call
-	subs    map[uint64]*Subscription
+	pending map[string]*Call
+	subs    map[string]*Subscription
 	counter uint64
 
 	nodeUps   chan body_types.NodeUpdates
@@ -85,8 +84,8 @@ func New(conf DemmonClientConf) *DemmonClient {
 		conf:      conf,
 		mutex:     sync.Mutex{},
 		counter:   1,
-		subs:      make(map[uint64]*Subscription),
-		pending:   make(map[uint64]*Call),
+		subs:      make(map[string]*Subscription),
+		pending:   make(map[string]*Call),
 		nodeUps:   make(chan body_types.NodeUpdates),
 		nodeDowns: make(chan body_types.NodeUpdates),
 		Mutex:     sync.Mutex{},
@@ -281,7 +280,7 @@ func (cl *DemmonClient) InstallContinuousQuery(
 	outputMetricName string,
 	outputMetricCount int,
 	nrRetries int,
-) (uint64, error) {
+) (*string, error) {
 	reqBody := body_types.InstallContinuousQueryRequest{
 		Expression:        expression,
 		Description:       description,
@@ -298,25 +297,25 @@ func (cl *DemmonClient) InstallContinuousQuery(
 
 	resp, err := cl.request(routes.InstallContinuousQuery, reqBody)
 	if err != nil {
-		return math.MaxUint64, err
+		return nil, err
 	}
 
 	if resp.Error {
-		return math.MaxUint64, resp.GetMsgAsErr()
+		return nil, resp.GetMsgAsErr()
 	}
 
 	respDecoded := body_types.InstallContinuousQueryReply{}
 	err = decode(resp.Message, &respDecoded)
 
 	if err != nil {
-		return math.MaxUint64, err
+		return nil, err
 	}
 
 	if resp.Error {
-		return math.MaxUint64, err
+		return nil, err
 	}
 
-	return respDecoded.TaskID, nil
+	return &respDecoded.TaskID, nil
 }
 
 func (cl *DemmonClient) InstallBucket(name string, frequency time.Duration, sampleCount int) error {
@@ -413,21 +412,21 @@ func (cl *DemmonClient) GetContinuousQueries() (*body_types.GetContinuousQueries
 	return respDecoded, nil
 }
 
-func (cl *DemmonClient) InstallCustomInterestSet(set body_types.CustomInterestSet) (int64, chan error, chan interface{}, error) {
+func (cl *DemmonClient) InstallCustomInterestSet(set body_types.CustomInterestSet) (*string, chan error, chan interface{}, error) {
 	resp, sub, err := cl.subscribe(routes.InstallCustomInterestSet, set)
 	if err != nil {
-		return math.MaxInt64, nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if resp.Error {
-		return math.MaxInt64, nil, nil, resp.GetMsgAsErr()
+		return nil, nil, nil, resp.GetMsgAsErr()
 	}
 
 	respDecoded := body_types.InstallInterestSetReply{}
 	err = decode(resp.Message, &respDecoded)
 
 	if resp.Error {
-		return math.MaxInt64, nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	errChan := make(chan error, 1)
@@ -449,26 +448,26 @@ func (cl *DemmonClient) InstallCustomInterestSet(set body_types.CustomInterestSe
 		}
 	}()
 
-	return respDecoded.SetID, errChan, sub.FinishChan, err
+	return &respDecoded.SetID, errChan, sub.FinishChan, err
 }
 
-func (cl *DemmonClient) InstallNeighborhoodInterestSet(is *body_types.NeighborhoodInterestSet) (int64, error) {
+func (cl *DemmonClient) InstallNeighborhoodInterestSet(is *body_types.NeighborhoodInterestSet) (*string, error) {
 	resp, err := cl.request(routes.InstallNeighborhoodInterestSet, is)
 	if err != nil {
-		return math.MaxInt64, err
+		return nil, err
 	}
 
 	if resp.Error {
-		return math.MaxInt64, resp.GetMsgAsErr()
+		return nil, resp.GetMsgAsErr()
 	}
 
 	respDecoded := body_types.InstallInterestSetReply{}
 	err = decode(resp.Message, &respDecoded)
 
 	if resp.Error {
-		return math.MaxInt64, err
+		return nil, err
 	}
-	return respDecoded.SetID, nil
+	return &respDecoded.SetID, nil
 }
 
 func (cl *DemmonClient) StartBabel() error {
@@ -483,83 +482,83 @@ func (cl *DemmonClient) StartBabel() error {
 	return nil
 }
 
-func (cl *DemmonClient) InstallGlobalAggregationFunction(is *body_types.GlobalAggregationFunction) (int64, error) {
+func (cl *DemmonClient) InstallGlobalAggregationFunction(is *body_types.GlobalAggregationFunction) (*string, error) {
 	resp, err := cl.request(routes.InstallGlobalAggregationFunction, is)
 	if err != nil {
-		return math.MaxInt64, err
+		return nil, err
 	}
 
 	if resp.Error {
-		return math.MaxInt64, resp.GetMsgAsErr()
+		return nil, resp.GetMsgAsErr()
 	}
 
 	respDecoded := body_types.InstallInterestSetReply{}
 	err = decode(resp.Message, &respDecoded)
 
 	if resp.Error {
-		return math.MaxInt64, err
+		return nil, err
 	}
-	return respDecoded.SetID, nil
+	return &respDecoded.SetID, nil
 }
 
-func (cl *DemmonClient) InstallTreeAggregationFunction(is *body_types.TreeAggregationSet) (int64, error) {
+func (cl *DemmonClient) InstallTreeAggregationFunction(is *body_types.TreeAggregationSet) (*string, error) {
 	resp, err := cl.request(routes.InstallTreeAggregationFunction, is)
 	if err != nil {
-		return math.MaxInt64, err
+		return nil, err
 	}
 
 	if resp.Error {
-		return math.MaxInt64, resp.GetMsgAsErr()
+		return nil, resp.GetMsgAsErr()
 	}
 
 	respDecoded := body_types.InstallInterestSetReply{}
 	err = decode(resp.Message, &respDecoded)
 
 	if resp.Error {
-		return math.MaxInt64, err
+		return nil, err
 	}
 
-	return respDecoded.SetID, nil
+	return &respDecoded.SetID, nil
 }
 
-func (cl *DemmonClient) RemoveCustomInterestSet(id int64) (int64, error) {
-	resp, err := cl.request(routes.RemoveCustomInterestSet, body_types.RemoveResourceRequest{id})
+func (cl *DemmonClient) RemoveCustomInterestSet(id string) (*string, error) {
+	resp, err := cl.request(routes.RemoveCustomInterestSet, body_types.RemoveResourceRequest{ResourceID: id})
 	if err != nil {
-		return math.MaxInt64, err
+		return nil, err
 	}
 
 	if resp.Error {
-		return math.MaxInt64, resp.GetMsgAsErr()
+		return nil, resp.GetMsgAsErr()
 	}
 
 	respDecoded := body_types.RemoveResourceReply{}
 	err = decode(resp.Message, &respDecoded)
 
 	if resp.Error {
-		return math.MaxInt64, err
+		return nil, err
 	}
 
-	return respDecoded.ResourceID, nil
+	return &respDecoded.ResourceID, nil
 }
 
-func (cl *DemmonClient) RemoveAlarm(id int64) (int64, error) {
-	resp, err := cl.request(routes.RemoveCustomInterestSet, body_types.RemoveResourceRequest{id})
+func (cl *DemmonClient) RemoveAlarm(id string) (*string, error) {
+	resp, err := cl.request(routes.RemoveCustomInterestSet, body_types.RemoveResourceRequest{ResourceID: id})
 	if err != nil {
-		return math.MaxInt64, err
+		return nil, err
 	}
 
 	if resp.Error {
-		return math.MaxInt64, resp.GetMsgAsErr()
+		return nil, resp.GetMsgAsErr()
 	}
 
 	respDecoded := body_types.RemoveResourceReply{}
 	err = decode(resp.Message, &respDecoded)
 
 	if resp.Error {
-		return math.MaxInt64, err
+		return nil, err
 	}
 
-	return respDecoded.ResourceID, nil
+	return &respDecoded.ResourceID, nil
 }
 
 func (cl *DemmonClient) UpdateCustomInterestSet(updateReq body_types.UpdateCustomInterestSetReq) error {
@@ -575,22 +574,22 @@ func (cl *DemmonClient) UpdateCustomInterestSet(updateReq body_types.UpdateCusto
 	return nil
 }
 
-func (cl *DemmonClient) InstallAlarm(alarm *body_types.InstallAlarmRequest) (int64, chan bool, chan error, chan interface{}, error) {
+func (cl *DemmonClient) InstallAlarm(alarm *body_types.InstallAlarmRequest) (*string, chan bool, chan error, chan interface{}, error) {
 
 	resp, sub, err := cl.subscribe(routes.InstallAlarm, alarm)
 	if err != nil {
-		return math.MaxInt64, nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	if resp.Error {
-		return math.MaxInt64, nil, nil, nil, resp.GetMsgAsErr()
+		return nil, nil, nil, nil, resp.GetMsgAsErr()
 	}
 
 	respDecoded := body_types.InstallAlarmReply{}
 	err = decode(resp.Message, &respDecoded)
 
 	if resp.Error {
-		return math.MaxInt64, nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	alarmTriggerChan := make(chan bool)
@@ -634,7 +633,7 @@ func (cl *DemmonClient) InstallAlarm(alarm *body_types.InstallAlarmRequest) (int
 		}
 	}()
 
-	return respDecoded.ID, alarmTriggerChan, alarmErrorChan, sub.FinishChan, err
+	return &respDecoded.ID, alarmTriggerChan, alarmErrorChan, sub.FinishChan, err
 }
 
 func (cl *DemmonClient) ConnectTimeout(timeout time.Duration) error {
@@ -664,9 +663,8 @@ func (cl *DemmonClient) request(reqType routes.RequestType, payload interface{})
 	}
 
 	cl.mutex.Lock()
-	id := cl.counter
+	id := fmt.Sprintf("%d", cl.counter)
 	cl.counter++
-
 	req := body_types.Request{ID: id, Type: reqType, Message: payload}
 	call := newCall(req)
 	cl.pending[id] = call
@@ -705,7 +703,7 @@ func (cl *DemmonClient) subscribe(reqType routes.RequestType, payload interface{
 	}
 
 	cl.mutex.Lock()
-	id := cl.counter
+	id := fmt.Sprintf("%d", cl.counter)
 	cl.counter++
 
 	req := body_types.Request{ID: id, Type: reqType, Message: payload}
