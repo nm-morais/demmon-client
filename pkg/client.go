@@ -563,7 +563,7 @@ func (cl *DemmonClient) RemoveAlarm(id int64) (int64, error) {
 }
 
 func (cl *DemmonClient) UpdateCustomInterestSet(updateReq body_types.UpdateCustomInterestSetReq) error {
-	resp, err := cl.request(routes.RemoveCustomInterestSet, updateReq)
+	resp, err := cl.request(routes.UpdateCustomInterestSetHosts, updateReq)
 	if err != nil {
 		return err
 	}
