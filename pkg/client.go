@@ -798,7 +798,10 @@ func (cl *DemmonClient) read(errChan chan error) {
 
 	fmt.Printf("Got err reading: %s\n", err.Error())
 
-	errChan <- err
+	select {
+	case errChan <- err:
+	case <-time.After(time.Second):
+	}
 
 	// TODO should cleanup pending calls ??
 	// fmt.Println("Read routine exiting due to err: ", err)
