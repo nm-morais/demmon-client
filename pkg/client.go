@@ -435,10 +435,14 @@ func (cl *DemmonClient) InstallCustomInterestSet(set body_types.CustomInterestSe
 		for {
 			select {
 			case v := <-sub.ContentChan:
-				errMsg := ""
-				err = decode(v, &errMsg)
+				body := body_types.CustomInterestSetErr{}
+				err = decode(v, &body)
+				if err != nil {
+					panic(err)
+				}
 				select {
-				case errChan <- err:
+				case errChan <- errors.New(body.Err):
+
 				case <-sub.FinishChan:
 					return
 				}
