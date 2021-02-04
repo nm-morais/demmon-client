@@ -759,13 +759,6 @@ func (cl *DemmonClient) read(errChan chan error) {
 	for err == nil {
 		var res body_types.Response
 		err = cl.conn.ReadJSON(&res)
-
-		if err != nil {
-			err = fmt.Errorf("error reading message: %q", err)
-			errChan <- err
-			return
-		}
-
 		if res.Push {
 			cl.mutex.Lock()
 			sub := cl.subs[res.ID]
@@ -789,9 +782,9 @@ func (cl *DemmonClient) read(errChan chan error) {
 		cl.mutex.Lock()
 		delete(cl.pending, res.ID)
 		cl.mutex.Unlock()
+
 		if call == nil {
-			err = errors.New("no pending request found")
-			continue
+			panic("no pending request found")
 		}
 
 		if res.Error {
@@ -802,6 +795,11 @@ func (cl *DemmonClient) read(errChan chan error) {
 			close(call.Done)
 		}
 	}
+
+	fmt.Printf("Got err reading: %s\n", err.Error())
+
+	errChan <- err
+
 	// TODO should cleanup pending calls ??
 	// fmt.Println("Read routine exiting due to err: ", err)
 	// cl.mutex.Lock()
