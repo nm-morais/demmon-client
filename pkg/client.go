@@ -211,6 +211,7 @@ func (cl *DemmonClient) SubscribeQuery(expression string, timeout, repeatTime ti
 		ResChan:    make(chan []body_types.TimeseriesDTO),
 		ErrChan:    make(chan error),
 	}
+
 	go func() {
 
 		defer close(querySub.ErrChan)
@@ -350,23 +351,30 @@ func (cl *DemmonClient) InstallBroadcastMessageHandler(messageID string) (chan b
 		return nil, nil, resp.GetMsgAsErr()
 	}
 
-	msgChan := make(chan body_types.Message, 1)
-
+	msgChan := make(chan body_types.Message)
+	var update *body_types.Message
 	go func() {
 		for {
-			select {
-			case v := <-sub.ContentChan:
-				update := body_types.Message{}
-				err = decode(v, &update)
-
+			if update == nil {
+				aux := body_types.Message{}
+				v := <-sub.ContentChan
+				err = decode(v, &aux)
 				if err != nil {
 					panic(err) // TODO error handling
 				}
-				select {
-				case msgChan <- update:
-				case <-sub.FinishChan:
-					return
+				update = &aux
+			}
+
+			select {
+			case v := <-sub.ContentChan:
+				aux := body_types.Message{}
+				err = decode(v, &aux)
+				if err != nil {
+					panic(err) // TODO error handling
 				}
+				update = &aux
+			case msgChan <- *update:
+				update = nil
 			case <-sub.FinishChan:
 				return
 			}
