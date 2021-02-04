@@ -640,7 +640,7 @@ func (cl *DemmonClient) InstallAlarm(alarm *body_types.InstallAlarmRequest) (*st
 	return &respDecoded.ID, alarmTriggerChan, alarmErrorChan, sub.FinishChan, err
 }
 
-func (cl *DemmonClient) ConnectTimeout(timeout time.Duration) error {
+func (cl *DemmonClient) ConnectTimeout(timeout time.Duration) (error, chan error) {
 	u := url.URL{
 		Host:   fmt.Sprintf("%s:%d", cl.conf.DemmonHostAddr, cl.conf.DemmonPort),
 		Path:   routes.Dial,
@@ -652,13 +652,14 @@ func (cl *DemmonClient) ConnectTimeout(timeout time.Duration) error {
 
 	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, u.String(), http.Header{})
 	if err != nil {
-		return err
+		return err, nil
 	}
 	defer resp.Body.Close()
 
+	connErrChan := make(chan error)
 	cl.conn = conn
-	go cl.read()
-	return err
+	go cl.read(connErrChan)
+	return err, connErrChan
 }
 
 func (cl *DemmonClient) request(reqType routes.RequestType, payload interface{}) (*body_types.Response, error) {
@@ -669,6 +670,7 @@ func (cl *DemmonClient) request(reqType routes.RequestType, payload interface{})
 	cl.mutex.Lock()
 	id := fmt.Sprintf("%d", cl.counter)
 	cl.counter++
+
 	req := body_types.Request{ID: id, Type: reqType, Message: payload}
 	call := newCall(req)
 	cl.pending[id] = call
@@ -752,7 +754,7 @@ func (cl *DemmonClient) clearSub(sub *Subscription) {
 	cl.mutex.Unlock()
 }
 
-func (cl *DemmonClient) read() {
+func (cl *DemmonClient) read(errChan chan error) {
 	var err error
 	for err == nil {
 		var res body_types.Response
@@ -760,7 +762,8 @@ func (cl *DemmonClient) read() {
 
 		if err != nil {
 			err = fmt.Errorf("error reading message: %q", err)
-			continue
+			errChan <- err
+			return
 		}
 
 		if res.Push {
