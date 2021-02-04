@@ -429,7 +429,7 @@ func (cl *DemmonClient) InstallCustomInterestSet(set body_types.CustomInterestSe
 		return nil, nil, nil, err
 	}
 
-	errChan := make(chan error, 1)
+	errChan := make(chan error)
 
 	go func() {
 		for {
@@ -766,6 +766,7 @@ func (cl *DemmonClient) read(errChan chan error) {
 				fmt.Println(ErrSubscriptionNotFound)
 				continue
 			}
+
 			select {
 			case sub.ContentChan <- res.Message:
 				fmt.Println("Delivered content to sub")
@@ -798,7 +799,7 @@ func (cl *DemmonClient) read(errChan chan error) {
 	}
 
 	fmt.Printf("Got err reading: %s\n", err.Error())
-
+	cl.conn = nil
 	select {
 	case errChan <- err:
 	case <-time.After(time.Second):
