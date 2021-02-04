@@ -681,11 +681,6 @@ func (cl *DemmonClient) request(reqType routes.RequestType, payload interface{})
 		return nil, err
 	}
 	cl.mutex.Unlock()
-	defer func() {
-		cl.mutex.Lock()
-		delete(cl.pending, id)
-		cl.mutex.Unlock()
-	}()
 	select {
 	case <-call.Done:
 	case <-time.After(cl.conf.RequestTimeout):
@@ -715,8 +710,8 @@ func (cl *DemmonClient) subscribe(reqType routes.RequestType, payload interface{
 	req := body_types.Request{ID: id, Type: reqType, Message: payload}
 	call := newCall(req)
 	newSub := newSub(id)
-	cl.pending[id] = call
 	cl.subs[id] = newSub
+	cl.pending[id] = call
 	err := cl.conn.WriteJSON(&req)
 	if err != nil {
 		close(newSub.ContentChan)
@@ -759,6 +754,9 @@ func (cl *DemmonClient) read(errChan chan error) {
 	for err == nil {
 		var res body_types.Response
 		err = cl.conn.ReadJSON(&res)
+		if err != nil {
+			break
+		}
 		if res.Push {
 			cl.mutex.Lock()
 			sub := cl.subs[res.ID]
@@ -778,14 +776,17 @@ func (cl *DemmonClient) read(errChan chan error) {
 			continue
 		}
 
-		call := cl.pending[res.ID]
 		cl.mutex.Lock()
+		call := cl.pending[res.ID]
 		delete(cl.pending, res.ID)
-		cl.mutex.Unlock()
 
 		if call == nil {
-			panic("no pending request found")
+			for k, v := range cl.pending {
+				fmt.Printf("Got %s %+v\n", k, v)
+			}
+			panic(fmt.Sprintf("no pending request found for request %+v", res))
 		}
+		cl.mutex.Unlock()
 
 		if res.Error {
 			call.Error = errors.New(res.Message.(string))
