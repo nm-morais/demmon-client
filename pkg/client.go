@@ -777,7 +777,7 @@ func (cl *DemmonClient) read(errChan chan error) {
 
 			select {
 			case sub.ContentChan <- res.Message:
-				fmt.Println("Delivered content to sub")
+				// fmt.Println("Delivered content to sub")
 			case <-time.After(1 * time.Second):
 				err = errors.New("could not deliver subscription result because there was no listener")
 			}
@@ -791,7 +791,7 @@ func (cl *DemmonClient) read(errChan chan error) {
 
 		if call == nil {
 			for k, v := range cl.pending {
-				fmt.Printf("Got %s %+v\n", k, v)
+				fmt.Printf("Pending call: %s %+v\n", k, v)
 			}
 			panic(fmt.Sprintf("no pending request found for request %+v", res))
 		}
