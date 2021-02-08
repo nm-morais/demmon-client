@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -807,7 +808,9 @@ func (cl *DemmonClient) read(errChan chan error) {
 	}
 
 	fmt.Printf("Got err reading: %s\n", err.Error())
+	cl.mutex.Lock()
 	cl.conn = nil
+	cl.mutex.Unlock()
 	select {
 	case errChan <- err:
 	case <-time.After(time.Second):
@@ -873,12 +876,25 @@ func toTimeHookFunc() mapstructure.DecodeHookFunc {
 		default:
 			return data, nil
 		}
-		// Convert it by parsing
 	}
 }
 
 func (cl *DemmonClient) Disconnect() {
-	cl.conn.Close()
+	err := cl.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "disconnecting"), time.Now().Add(time.Second))
+	if err != nil && errors.Is(err, websocket.ErrCloseSent) {
+		log.Println("write error writing close message:", err)
+		cl.conn.Close()
+		return
+	}
+
+	go func() {
+		<-time.After(time.Second)
+		cl.mutex.Lock()
+		if cl.conn != nil {
+			cl.conn.Close()
+		}
+		cl.mutex.Unlock()
+	}()
 }
 
 // func (cl *DemmonClient) RegisterMetrics(metrics []body_types.MetricMetadata) error {
