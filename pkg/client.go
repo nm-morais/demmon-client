@@ -132,7 +132,7 @@ func (cl *DemmonClient) SubscribeNodeUpdates() (*body_types.View, error, chan in
 		return nil, err, nil, nil
 	}
 
-	nodeUpdateChan := make(chan body_types.NodeUpdates, 1)
+	nodeUpdateChan := make(chan body_types.NodeUpdates)
 
 	go func() {
 		updates := []body_types.NodeUpdates{}
@@ -140,7 +140,6 @@ func (cl *DemmonClient) SubscribeNodeUpdates() (*body_types.View, error, chan in
 		handleUpdateFunc := func(nextUpdate interface{}) {
 			update := body_types.NodeUpdates{}
 			err = decode(nextUpdate, &update)
-
 			if err != nil {
 				panic(err)
 			}
@@ -353,35 +352,36 @@ func (cl *DemmonClient) InstallBroadcastMessageHandler(messageID string) (chan b
 	}
 
 	msgChan := make(chan body_types.Message)
-	var update *body_types.Message
+
 	go func() {
+		updates := []body_types.Message{}
+
+		handleUpdateFunc := func(nextUpdate interface{}) {
+			update := &body_types.Message{}
+			err = decode(nextUpdate, &update)
+			if err != nil {
+				panic(err)
+			}
+			updates = append(updates, *update)
+		}
+
 		for {
-			if update == nil {
-				aux := body_types.Message{}
-				v := <-sub.ContentChan
-				err = decode(v, &aux)
-				if err != nil {
-					panic(err) // TODO error handling
-				}
-				update = &aux
+			if len(updates) == 0 {
+				nextUpdate := <-sub.ContentChan
+				handleUpdateFunc(nextUpdate)
 			}
 
 			select {
 			case v := <-sub.ContentChan:
-				aux := body_types.Message{}
-				err = decode(v, &aux)
-				if err != nil {
-					panic(err) // TODO error handling
-				}
-				update = &aux
-			case msgChan <- *update:
-				update = nil
+				handleUpdateFunc(v)
+			case msgChan <- updates[0]:
+				updates = updates[1:]
 			case <-sub.FinishChan:
+				updates = nil
 				return
 			}
 		}
 	}()
-
 	return msgChan, sub.FinishChan, err
 }
 
@@ -624,13 +624,14 @@ func (cl *DemmonClient) InstallAlarm(alarm *body_types.InstallAlarmRequest) (*st
 			if len(updates) == 0 {
 				nextUpdate := <-sub.ContentChan
 				handleUpdateFunc(nextUpdate)
-				continue
 			}
 
-			update := updates[0]
-			if update.Error {
-				alarmErrorChan <- fmt.Errorf("%s", update.ErrorMsg)
-				updates = nil
+			if updates[0].Error {
+				select {
+				case <-sub.FinishChan:
+					return
+				case alarmErrorChan <- fmt.Errorf("%s", updates[0].ErrorMsg):
+				}
 				return
 			}
 
@@ -640,7 +641,6 @@ func (cl *DemmonClient) InstallAlarm(alarm *body_types.InstallAlarmRequest) (*st
 			case alarmTriggerChan <- updates[0].Trigger:
 				updates = updates[1:]
 			case <-sub.FinishChan:
-				updates = nil
 				return
 			}
 		}
@@ -777,10 +777,14 @@ func (cl *DemmonClient) read(errChan chan error) {
 			}
 
 			select {
-			case sub.ContentChan <- res.Message:
-				// fmt.Println("Delivered content to sub")
-			case <-time.After(1 * time.Second):
-				err = errors.New("could not deliver subscription result because there was no listener")
+			case <-sub.FinishChan:
+			default:
+				select {
+				case sub.ContentChan <- res.Message:
+				case <-sub.FinishChan:
+				case <-time.After(3 * time.Second):
+					err = errors.New("could not deliver subscription result because there was no listener")
+				}
 			}
 
 			continue
