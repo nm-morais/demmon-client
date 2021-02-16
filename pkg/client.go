@@ -18,6 +18,10 @@ import (
 )
 
 var (
+	ErrNoListener = errors.New("could not deliver subscription result because there was no listener")
+)
+
+var (
 	ErrNotConnected         = errors.New("not connected")
 	ErrTimeout              = errors.New("request timed out")
 	ErrSubFinished          = errors.New("subscription finished")
@@ -237,8 +241,11 @@ func (cl *DemmonClient) SubscribeQuery(expression string, timeout, repeatTime ti
 			if resp.Error {
 				querySub.ErrChan <- err
 				return
-			} else {
-				querySub.ResChan <- respDecoded
+			}
+
+			select {
+			case querySub.ResChan <- respDecoded:
+			case <-querySub.FinishChan:
 			}
 		}
 	}()
@@ -737,9 +744,11 @@ func (cl *DemmonClient) subscribe(reqType routes.RequestType, payload interface{
 		delete(cl.pending, id)
 		delete(cl.subs, id)
 		cl.mutex.Unlock()
+
 		call.Error = ErrTimeout
 		return nil, nil, call.Error
 	}
+
 	if !call.Res.Error {
 		go func() {
 			<-newSub.FinishChan
@@ -766,6 +775,7 @@ func (cl *DemmonClient) read(errChan chan error) {
 		if err != nil {
 			break
 		}
+
 		if res.Push {
 			cl.mutex.Lock()
 			sub := cl.subs[res.ID]
@@ -783,7 +793,7 @@ func (cl *DemmonClient) read(errChan chan error) {
 				case sub.ContentChan <- res.Message:
 				case <-sub.FinishChan:
 				case <-time.After(3 * time.Second):
-					err = errors.New("could not deliver subscription result because there was no listener")
+					err = ErrNoListener
 				}
 			}
 
