@@ -81,7 +81,6 @@ type DemmonClient struct {
 
 	nodeUps   chan body_types.NodeUpdates
 	nodeDowns chan body_types.NodeUpdates
-	sync.Mutex
 }
 
 func New(conf DemmonClientConf) *DemmonClient {
@@ -93,7 +92,6 @@ func New(conf DemmonClientConf) *DemmonClient {
 		pending:   make(map[string]*Call),
 		nodeUps:   make(chan body_types.NodeUpdates),
 		nodeDowns: make(chan body_types.NodeUpdates),
-		Mutex:     sync.Mutex{},
 	}
 	return cl
 }
@@ -673,17 +671,20 @@ func (cl *DemmonClient) ConnectTimeout(timeout time.Duration) (error, chan error
 	defer resp.Body.Close()
 
 	connErrChan := make(chan error)
+	cl.mutex.Lock()
+	defer cl.mutex.Unlock()
 	cl.conn = conn
+
 	go cl.read(connErrChan)
 	return err, connErrChan
 }
 
 func (cl *DemmonClient) request(reqType routes.RequestType, payload interface{}) (*body_types.Response, error) {
+	cl.mutex.Lock()
 	if cl.conn == nil {
+		cl.mutex.Unlock()
 		return nil, ErrNotConnected
 	}
-
-	cl.mutex.Lock()
 	id := fmt.Sprintf("%d", cl.counter)
 	cl.counter++
 
@@ -715,11 +716,12 @@ func (cl *DemmonClient) subscribe(reqType routes.RequestType, payload interface{
 	*Subscription,
 	error,
 ) {
+	cl.mutex.Lock()
 	if cl.conn == nil {
+		cl.mutex.Unlock()
 		return nil, nil, ErrNotConnected
 	}
 
-	cl.mutex.Lock()
 	id := fmt.Sprintf("%d", cl.counter)
 	cl.counter++
 
@@ -894,21 +896,26 @@ func toTimeHookFunc() mapstructure.DecodeHookFunc {
 }
 
 func (cl *DemmonClient) Disconnect() {
-	err := cl.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "disconnecting"), time.Now().Add(time.Second))
-	if err != nil && errors.Is(err, websocket.ErrCloseSent) {
-		log.Println("write error writing close message:", err)
-		cl.conn.Close()
-		return
-	}
+	cl.mutex.Lock()
+	defer cl.mutex.Unlock()
 
-	go func() {
-		<-time.After(time.Second)
-		cl.mutex.Lock()
-		if cl.conn != nil {
+	if cl.conn != nil {
+		err := cl.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "disconnecting"), time.Now().Add(time.Second))
+		if err != nil && errors.Is(err, websocket.ErrCloseSent) {
+			log.Println("write error writing close message:", err)
 			cl.conn.Close()
+			return
 		}
-		cl.mutex.Unlock()
-	}()
+
+		go func() {
+			<-time.After(time.Second)
+			cl.mutex.Lock()
+			if cl.conn != nil {
+				cl.conn.Close()
+			}
+			cl.mutex.Unlock()
+		}()
+	}
 }
 
 // func (cl *DemmonClient) RegisterMetrics(metrics []body_types.MetricMetadata) error {
