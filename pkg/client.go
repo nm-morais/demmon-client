@@ -81,6 +81,7 @@ type DemmonClient struct {
 
 	nodeUps   chan body_types.NodeUpdates
 	nodeDowns chan body_types.NodeUpdates
+	sync.Mutex
 }
 
 func New(conf DemmonClientConf) *DemmonClient {
@@ -92,6 +93,7 @@ func New(conf DemmonClientConf) *DemmonClient {
 		pending:   make(map[string]*Call),
 		nodeUps:   make(chan body_types.NodeUpdates),
 		nodeDowns: make(chan body_types.NodeUpdates),
+		Mutex:     sync.Mutex{},
 	}
 	return cl
 }
