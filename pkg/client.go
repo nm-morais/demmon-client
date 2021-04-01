@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -35,7 +36,7 @@ type QuerySubscription struct {
 	ErrChan    chan error
 }
 
-// Call represents an active request
+// Call represents an active request.
 type Call struct {
 	Req   body_types.Request
 	Res   body_types.Response
@@ -43,11 +44,11 @@ type Call struct {
 	Error error
 }
 
-// Call represents an active request
+// Call represents an active request.
 type Subscription struct {
 	FinishChan  chan interface{}
 	ContentChan chan interface{}
-	Id          string
+	ID          string
 }
 
 func newCall(req body_types.Request) *Call {
@@ -59,7 +60,7 @@ func newCall(req body_types.Request) *Call {
 
 func newSub(id string) *Subscription {
 	return &Subscription{
-		Id:          id,
+		ID:          id,
 		ContentChan: make(chan interface{}),
 	}
 }
@@ -73,28 +74,32 @@ type DemmonClientConf struct {
 type DemmonClient struct {
 	conf DemmonClientConf
 
-	mutex   sync.Mutex
-	conn    *websocket.Conn
-	pending map[string]*Call
-	subs    map[string]*Subscription
-	counter uint64
+	connMu       *sync.Mutex
+	conn         *websocket.Conn
+	pendingCalls *sync.Map
+	subs         *sync.Map
+	counter      *uint64
 
 	nodeUps   chan body_types.NodeUpdates
 	nodeDowns chan body_types.NodeUpdates
-	sync.Mutex
+	*sync.Mutex
 }
 
 func New(conf DemmonClientConf) *DemmonClient {
+	var counter uint64 = 0
+
 	cl := &DemmonClient{
-		conf:      conf,
-		mutex:     sync.Mutex{},
-		counter:   1,
-		subs:      make(map[string]*Subscription),
-		pending:   make(map[string]*Call),
-		nodeUps:   make(chan body_types.NodeUpdates),
-		nodeDowns: make(chan body_types.NodeUpdates),
-		Mutex:     sync.Mutex{},
+		conf:         conf,
+		connMu:       &sync.Mutex{},
+		conn:         nil,
+		pendingCalls: &sync.Map{},
+		subs:         &sync.Map{},
+		counter:      &counter,
+		nodeUps:      make(chan body_types.NodeUpdates),
+		nodeDowns:    make(chan body_types.NodeUpdates),
+		Mutex:        &sync.Mutex{},
 	}
+
 	return cl
 }
 
@@ -118,22 +123,22 @@ func (cl *DemmonClient) GetInView() (*body_types.View, error) {
 	return respDecoded, nil
 }
 
-func (cl *DemmonClient) SubscribeNodeUpdates() (*body_types.View, error, chan interface{}, chan body_types.NodeUpdates) {
-
+func (cl *DemmonClient) SubscribeNodeUpdates() (
+	response *body_types.View, finishChan chan interface{}, updateChan chan body_types.NodeUpdates, err error) {
 	resp, sub, err := cl.subscribe(routes.MembershipUpdates, nil)
 	if err != nil {
-		return nil, err, nil, nil
+		return nil, nil, nil, err
 	}
 
 	if resp.Error {
-		return nil, resp.GetMsgAsErr(), nil, nil
+		return nil, nil, nil, resp.GetMsgAsErr()
 	}
 
 	respDecoded := &body_types.View{}
 	err = decode(resp.Message, respDecoded)
 
 	if resp.Error {
-		return nil, err, nil, nil
+		return nil, nil, nil, err
 	}
 
 	nodeUpdateChan := make(chan body_types.NodeUpdates)
@@ -144,9 +149,11 @@ func (cl *DemmonClient) SubscribeNodeUpdates() (*body_types.View, error, chan in
 		handleUpdateFunc := func(nextUpdate interface{}) {
 			update := body_types.NodeUpdates{}
 			err = decode(nextUpdate, &update)
+
 			if err != nil {
 				panic(err)
 			}
+
 			updates = append(updates, update)
 		}
 
@@ -167,7 +174,7 @@ func (cl *DemmonClient) SubscribeNodeUpdates() (*body_types.View, error, chan in
 		}
 	}()
 
-	return respDecoded, err, sub.FinishChan, nodeUpdateChan
+	return respDecoded, sub.FinishChan, nodeUpdateChan, err
 }
 
 func (cl *DemmonClient) GetRegisteredMetrics() ([]string, error) {
@@ -217,7 +224,6 @@ func (cl *DemmonClient) SubscribeQuery(expression string, timeout, repeatTime ti
 	}
 
 	go func() {
-
 		defer close(querySub.ErrChan)
 		defer close(querySub.ResChan)
 
@@ -233,11 +239,13 @@ func (cl *DemmonClient) SubscribeQuery(expression string, timeout, repeatTime ti
 				case querySub.ErrChan <- resp.GetMsgAsErr():
 				default:
 				}
+
 				return
 			}
 
 			respDecoded := make([]body_types.TimeseriesDTO, 0)
 			err = decode(resp.Message, &respDecoded)
+
 			if resp.Error {
 				querySub.ErrChan <- err
 				return
@@ -344,7 +352,8 @@ func (cl *DemmonClient) InstallBucket(name string, frequency time.Duration, samp
 	return nil
 }
 
-func (cl *DemmonClient) InstallBroadcastMessageHandler(messageID string) (chan body_types.Message, chan interface{}, error) {
+func (cl *DemmonClient) InstallBroadcastMessageHandler(messageID string) (
+	msgChan chan body_types.Message, finishChan chan interface{}, err error) {
 	reqBody := body_types.InstallMessageHandlerRequest{
 		ID: messageID,
 	}
@@ -358,7 +367,7 @@ func (cl *DemmonClient) InstallBroadcastMessageHandler(messageID string) (chan b
 		return nil, nil, resp.GetMsgAsErr()
 	}
 
-	msgChan := make(chan body_types.Message)
+	msgChan = make(chan body_types.Message)
 
 	go func() {
 		updates := []body_types.Message{}
@@ -366,9 +375,11 @@ func (cl *DemmonClient) InstallBroadcastMessageHandler(messageID string) (chan b
 		handleUpdateFunc := func(nextUpdate interface{}) {
 			update := &body_types.Message{}
 			err = decode(nextUpdate, &update)
+
 			if err != nil {
 				panic(err)
 			}
+
 			updates = append(updates, *update)
 		}
 
@@ -389,6 +400,7 @@ func (cl *DemmonClient) InstallBroadcastMessageHandler(messageID string) (chan b
 			}
 		}
 	}()
+
 	return msgChan, sub.FinishChan, err
 }
 
@@ -487,6 +499,7 @@ func (cl *DemmonClient) InstallNeighborhoodInterestSet(is *body_types.Neighborho
 	if resp.Error {
 		return nil, err
 	}
+
 	return &respDecoded.SetID, nil
 }
 
@@ -594,8 +607,8 @@ func (cl *DemmonClient) UpdateCustomInterestSet(updateReq body_types.UpdateCusto
 	return nil
 }
 
-func (cl *DemmonClient) InstallAlarm(alarm *body_types.InstallAlarmRequest) (*string, chan bool, chan error, chan interface{}, error) {
-
+func (cl *DemmonClient) InstallAlarm(alarm *body_types.InstallAlarmRequest) (
+	alarmID *string, triggerChan chan bool, errChan chan error, finishChan chan interface{}, err error) {
 	resp, sub, err := cl.subscribe(routes.InstallAlarm, alarm)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -624,6 +637,7 @@ func (cl *DemmonClient) InstallAlarm(alarm *body_types.InstallAlarmRequest) (*st
 			if err != nil {
 				panic(err)
 			}
+
 			updates = append(updates, update)
 		}
 
@@ -673,33 +687,34 @@ func (cl *DemmonClient) ConnectTimeout(timeout time.Duration) (error, chan error
 	defer resp.Body.Close()
 
 	connErrChan := make(chan error)
-	cl.mutex.Lock()
-	defer cl.mutex.Unlock()
+	cl.connMu.Lock()
 	cl.conn = conn
+	cl.connMu.Unlock()
 
 	go cl.read(connErrChan)
 	return err, connErrChan
 }
 
 func (cl *DemmonClient) request(reqType routes.RequestType, payload interface{}) (*body_types.Response, error) {
-	cl.mutex.Lock()
+	cl.connMu.Lock()
 	if cl.conn == nil {
-		cl.mutex.Unlock()
+		cl.connMu.Unlock()
 		return nil, ErrNotConnected
 	}
-	id := fmt.Sprintf("%d", cl.counter)
-	cl.counter++
+	cl.connMu.Unlock()
+
+	callID := atomic.AddUint64(cl.counter, 1)
+	id := fmt.Sprintf("%d", callID)
 
 	req := body_types.Request{ID: id, Type: reqType, Message: payload}
 	call := newCall(req)
-	cl.pending[id] = call
+	cl.pendingCalls.Store(id, call)
 	err := cl.conn.WriteJSON(&req)
+
 	if err != nil {
-		delete(cl.pending, id)
-		cl.mutex.Unlock()
+		cl.pendingCalls.Delete(id)
 		return nil, err
 	}
-	cl.mutex.Unlock()
 	select {
 	case <-call.Done:
 	case <-time.After(cl.conf.RequestTimeout):
@@ -718,36 +733,33 @@ func (cl *DemmonClient) subscribe(reqType routes.RequestType, payload interface{
 	*Subscription,
 	error,
 ) {
-	cl.mutex.Lock()
+	cl.connMu.Lock()
 	if cl.conn == nil {
-		cl.mutex.Unlock()
+		cl.connMu.Unlock()
 		return nil, nil, ErrNotConnected
 	}
+	cl.connMu.Unlock()
 
-	id := fmt.Sprintf("%d", cl.counter)
-	cl.counter++
+	callID := atomic.AddUint64(cl.counter, 1)
+	id := fmt.Sprintf("%d", callID)
 
 	req := body_types.Request{ID: id, Type: reqType, Message: payload}
 	call := newCall(req)
 	newSub := newSub(id)
-	cl.subs[id] = newSub
-	cl.pending[id] = call
+	cl.subs.Store(id, newSub)
+	cl.pendingCalls.Store(id, call)
 	err := cl.conn.WriteJSON(&req)
 	if err != nil {
 		close(newSub.ContentChan)
-		delete(cl.subs, id)
-		delete(cl.pending, id)
-		cl.mutex.Unlock()
+		cl.subs.Delete(id)
+		cl.pendingCalls.Delete(id)
 		return nil, nil, err
 	}
-	cl.mutex.Unlock()
 	select {
 	case <-call.Done:
 	case <-time.After(cl.conf.RequestTimeout):
-		cl.mutex.Lock()
-		delete(cl.pending, id)
-		delete(cl.subs, id)
-		cl.mutex.Unlock()
+		cl.pendingCalls.Delete(id)
+		cl.subs.Delete(id)
 
 		call.Error = ErrTimeout
 		return nil, nil, call.Error
@@ -756,19 +768,19 @@ func (cl *DemmonClient) subscribe(reqType routes.RequestType, payload interface{
 	if !call.Res.Error {
 		go func() {
 			<-newSub.FinishChan
-			cl.clearSub(newSub)
+			cl.clearSub(id)
 		}()
 	}
 
 	return &call.Res, newSub, nil
 }
 
-func (cl *DemmonClient) clearSub(sub *Subscription) {
+func (cl *DemmonClient) clearSub(id string) {
 	fmt.Println("Clearing subscription...")
-	cl.mutex.Lock()
-	delete(cl.subs, sub.Id)
-	close(sub.ContentChan)
-	cl.mutex.Unlock()
+	sub, loaded := cl.subs.LoadAndDelete(id)
+	if loaded {
+		close(sub.(*Subscription).ContentChan)
+	}
 }
 
 func (cl *DemmonClient) read(errChan chan error) {
@@ -781,15 +793,12 @@ func (cl *DemmonClient) read(errChan chan error) {
 		}
 
 		if res.Push {
-			cl.mutex.Lock()
-			sub := cl.subs[res.ID]
-			cl.mutex.Unlock()
-
-			if sub == nil {
-				fmt.Println(ErrSubscriptionNotFound)
-				continue
+			subGeneric, ok := cl.subs.Load(res.ID)
+			if !ok {
+				panic(ErrSubscriptionNotFound) // TODO remove this, only for testing and development
 			}
 
+			sub := subGeneric.(*Subscription)
 			select {
 			case <-sub.FinishChan:
 			default:
@@ -804,18 +813,12 @@ func (cl *DemmonClient) read(errChan chan error) {
 			continue
 		}
 
-		cl.mutex.Lock()
-		call := cl.pending[res.ID]
-		delete(cl.pending, res.ID)
-
-		if call == nil {
-			for k, v := range cl.pending {
-				fmt.Printf("Pending call: %s %+v\n", k, v)
-			}
+		callGeneric, ok := cl.pendingCalls.LoadAndDelete(res.ID)
+		if !ok {
 			panic(fmt.Sprintf("no pending request found for request %+v", res))
 		}
-		cl.mutex.Unlock()
 
+		call := callGeneric.(*Call)
 		if res.Error {
 			call.Error = errors.New(res.Message.(string))
 			close(call.Done)
@@ -826,28 +829,13 @@ func (cl *DemmonClient) read(errChan chan error) {
 	}
 
 	fmt.Printf("Got err reading: %s\n", err.Error())
-	cl.mutex.Lock()
+	cl.connMu.Lock()
 	cl.conn = nil
-	cl.mutex.Unlock()
+	cl.connMu.Unlock()
 	select {
 	case errChan <- err:
 	case <-time.After(time.Second):
 	}
-
-	// TODO should cleanup pending calls ??
-	// fmt.Println("Read routine exiting due to err: ", err)
-	// cl.mutex.Lock()
-	// for _, call := range cl.pending {
-	// 	call.Error = err
-	// 	close(call.Done)
-	// 	select {
-	// 	case <-call.Done:
-	// 		delete(cl.pending, res.ID)
-	// 	case <-time.After(1 * time.Second):
-	// 		panic("Timed out propagating error to call") // TODO remove
-	// 	}
-	// }
-	// cl.mutex.Unlock()
 }
 
 func decode(input, result interface{}) error {
@@ -898,11 +886,14 @@ func toTimeHookFunc() mapstructure.DecodeHookFunc {
 }
 
 func (cl *DemmonClient) Disconnect() {
-	cl.mutex.Lock()
-	defer cl.mutex.Unlock()
+	cl.connMu.Lock()
+	defer cl.connMu.Unlock()
 
 	if cl.conn != nil {
-		err := cl.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "disconnecting"), time.Now().Add(time.Second))
+		err := cl.conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseGoingAway,
+				"disconnecting"),
+			time.Now().Add(time.Second))
 		if err != nil && errors.Is(err, websocket.ErrCloseSent) {
 			log.Println("write error writing close message:", err)
 			cl.conn.Close()
@@ -911,11 +902,11 @@ func (cl *DemmonClient) Disconnect() {
 
 		go func() {
 			<-time.After(time.Second)
-			cl.mutex.Lock()
+			cl.connMu.Lock()
 			if cl.conn != nil {
 				cl.conn.Close()
 			}
-			cl.mutex.Unlock()
+			cl.connMu.Unlock()
 		}()
 	}
 }
