@@ -430,6 +430,7 @@ func (cl *DemmonClient) GetContinuousQueries() (*body_types.GetContinuousQueries
 
 	respDecoded := &body_types.GetContinuousQueriesReply{}
 	err = decode(resp.Message, &respDecoded)
+
 	if err != nil {
 		return nil, err
 	}
@@ -437,6 +438,7 @@ func (cl *DemmonClient) GetContinuousQueries() (*body_types.GetContinuousQueries
 	if resp.Error {
 		return nil, err
 	}
+
 	return respDecoded, nil
 }
 
@@ -687,6 +689,7 @@ func (cl *DemmonClient) ConnectTimeout(timeout time.Duration) (error, chan error
 	defer resp.Body.Close()
 
 	connErrChan := make(chan error)
+
 	cl.connMu.Lock()
 	cl.conn = conn
 	cl.connMu.Unlock()
@@ -708,7 +711,10 @@ func (cl *DemmonClient) request(reqType routes.RequestType, payload interface{})
 
 	req := body_types.Request{ID: id, Type: reqType, Message: payload}
 	call := newCall(req)
-	cl.pendingCalls.Store(id, call)
+	_, loaded := cl.pendingCalls.LoadOrStore(id, call)
+	if loaded {
+		panic("loaded existing pending call in new request.")
+	}
 	err := cl.conn.WriteJSON(&req)
 
 	if err != nil {
@@ -719,6 +725,7 @@ func (cl *DemmonClient) request(reqType routes.RequestType, payload interface{})
 	case <-call.Done:
 	case <-time.After(cl.conf.RequestTimeout):
 		call.Error = ErrTimeout
+		panic(fmt.Sprintf("Call with id %s and request: %+v timed out", id, call.Req))
 	}
 
 	if call.Error != nil {
