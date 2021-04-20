@@ -715,7 +715,9 @@ func (cl *DemmonClient) request(reqType routes.RequestType, payload interface{})
 	if loaded {
 		panic("loaded existing pending call in new request.")
 	}
+	cl.connMu.Lock()
 	err := cl.conn.WriteJSON(&req)
+	cl.connMu.Unlock()
 
 	if err != nil {
 		cl.pendingCalls.Delete(id)
@@ -755,7 +757,9 @@ func (cl *DemmonClient) subscribe(reqType routes.RequestType, payload interface{
 	newSub := newSub(id)
 	cl.subs.Store(id, newSub)
 	cl.pendingCalls.Store(id, call)
+	cl.connMu.Lock()
 	err := cl.conn.WriteJSON(&req)
+	cl.connMu.Unlock()
 	if err != nil {
 		close(newSub.ContentChan)
 		cl.subs.Delete(id)
@@ -897,10 +901,12 @@ func (cl *DemmonClient) Disconnect() {
 	defer cl.connMu.Unlock()
 
 	if cl.conn != nil {
+		cl.connMu.Lock()
 		err := cl.conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseGoingAway,
 				"disconnecting"),
 			time.Now().Add(time.Second))
+		cl.connMu.Unlock()
 		if err != nil && errors.Is(err, websocket.ErrCloseSent) {
 			log.Println("write error writing close message:", err)
 			cl.conn.Close()
