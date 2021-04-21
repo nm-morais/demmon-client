@@ -727,6 +727,7 @@ func (cl *DemmonClient) request(reqType routes.RequestType, payload interface{})
 	select {
 	case <-call.Done:
 	case <-time.After(cl.conf.RequestTimeout):
+		cl.pendingCalls.Delete(id)
 		call.Error = ErrTimeout
 		// panic(fmt.Sprintf("Call with id %s and request: %+v timed out", id, call.Req))
 	}
@@ -807,7 +808,9 @@ func (cl *DemmonClient) read(errChan chan error) {
 		if res.Push {
 			subGeneric, ok := cl.subs.Load(res.ID)
 			if !ok {
-				panic(ErrSubscriptionNotFound) // TODO remove this, only for testing and development
+				// panic(ErrSubscriptionNotFound) // TODO remove this, only for testing and development
+				fmt.Printf("ERR: %s", ErrSubscriptionNotFound)
+				continue
 			}
 
 			sub := subGeneric.(*Subscription)
@@ -827,9 +830,9 @@ func (cl *DemmonClient) read(errChan chan error) {
 
 		callGeneric, ok := cl.pendingCalls.LoadAndDelete(res.ID)
 		if !ok {
-			panic(fmt.Sprintf("no pending request found for request %+v", res))
+			fmt.Printf("ERR: %s", ErrSubscriptionNotFound)
+			continue
 		}
-
 		call := callGeneric.(*Call)
 		if res.Error {
 			call.Error = errors.New(res.Message.(string))
