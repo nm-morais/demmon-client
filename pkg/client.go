@@ -715,6 +715,7 @@ func (cl *DemmonClient) request(reqType routes.RequestType, payload interface{})
 	if loaded {
 		panic("loaded existing pending call in new request.")
 	}
+
 	cl.connMu.Lock()
 	err := cl.conn.WriteJSON(&req)
 	cl.connMu.Unlock()
@@ -727,7 +728,7 @@ func (cl *DemmonClient) request(reqType routes.RequestType, payload interface{})
 	case <-call.Done:
 	case <-time.After(cl.conf.RequestTimeout):
 		call.Error = ErrTimeout
-		panic(fmt.Sprintf("Call with id %s and request: %+v timed out", id, call.Req))
+		// panic(fmt.Sprintf("Call with id %s and request: %+v timed out", id, call.Req))
 	}
 
 	if call.Error != nil {
