@@ -905,12 +905,10 @@ func (cl *DemmonClient) Disconnect() {
 	defer cl.connMu.Unlock()
 
 	if cl.conn != nil {
-		cl.connMu.Lock()
 		err := cl.conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseGoingAway,
 				"disconnecting"),
 			time.Now().Add(time.Second))
-		cl.connMu.Unlock()
 		if err != nil && errors.Is(err, websocket.ErrCloseSent) {
 			log.Println("write error writing close message:", err)
 			cl.conn.Close()
