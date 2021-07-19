@@ -257,7 +257,6 @@ func (cl *DemmonClient) SubscribeQuery(expression string, timeout, repeatTime ti
 			}
 		}
 	}()
-
 	return querySub
 }
 
@@ -809,7 +808,7 @@ func (cl *DemmonClient) read(errChan chan error) {
 			subGeneric, ok := cl.subs.Load(res.ID)
 			if !ok {
 				// panic(ErrSubscriptionNotFound) // TODO remove this, only for testing and development
-				fmt.Printf("ERR: %s", ErrSubscriptionNotFound)
+				fmt.Printf("ERR: %s for request: %+v", ErrSubscriptionNotFound, res)
 				continue
 			}
 
